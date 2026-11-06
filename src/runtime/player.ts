@@ -2,9 +2,9 @@ import type { NoteEvent, Output, ScheduledNote, Source } from './types';
 
 export type Engine<S, P, T> = (state: S, piece: P, targets: T) => { events: NoteEvent[]; state: S };
 
-/** A policy that hears each scheduled cycle and may steer targets (the form director, later the conductor's policy). */
+/** A policy that hears each scheduled cycle and may steer targets or edit the piece (the form director). */
 export type Director<S, P, T> = {
-  hear(state: S, events: NoteEvent[], targets: T, piece: P): Partial<T> | undefined;
+  hear(state: S, events: NoteEvent[], targets: T, piece: P): { steer?: Partial<T>; edit?: Partial<P> } | undefined;
 };
 
 /** Every change, from any source, timestamped: Piece + decisions + seed reproduce what was heard (D4). */
@@ -137,8 +137,9 @@ export class Player<S extends { cycle: number }, P extends Timing, T> {
         this.onNote?.(note);
       }
       this.state = state;
-      const steer = this.director?.hear(state, events, this.targets, this.piece);
-      if (steer) this.steer(steer, 'form');
+      const heard = this.director?.hear(state, events, this.targets, this.piece);
+      if (heard?.edit) this.edit(heard.edit, 'form');
+      if (heard?.steer && Object.keys(heard.steer).length) this.steer(heard.steer, 'form');
       this.shown.push({ time: this.nextCycleTime, state, targets: this.targets });
       this.nextCycleTime += cycleSec;
     }

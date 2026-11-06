@@ -4,13 +4,17 @@ import { emptyModel, listen, ASPECTS, type Aspect, type Info, type Model } from 
 import { INSTRUMENTS, LAYERS, SOLO_PIANO, type InstrumentName } from '../../runtime/routing';
 import type { NoteEvent } from '../../runtime/types';
 import type { Device } from './devices';
+import { applyDevices } from './devices';
+import { orderFor, repairPattern, varyPattern, violations } from './melody';
 import type { PulseState } from './engine';
 import type { Piece, Targets } from './model';
 import type { KeySig } from './theory';
 
 export type Phase = 'build' | 'sustain' | 'release' | 'turn';
-export type Changeable = 'harmony' | 'pitch' | 'rhythm' | 'register' | 'timbre';
-export const CHANGEABLE: Changeable[] = ['harmony', 'pitch', 'rhythm', 'register', 'timbre'];
+export type Changeable = 'harmony' | 'pitch' | 'melody' | 'rhythm' | 'register' | 'timbre';
+export const CHANGEABLE: Changeable[] = ['harmony', 'pitch', 'melody', 'rhythm', 'register', 'timbre'];
+/** The listener's aspect that hears each kind of change (a melodic variation is heard as pitch news). */
+const HEARD_AS: Record<Changeable, Aspect> = { harmony: 'harmony', pitch: 'pitch', melody: 'pitch', rhythm: 'rhythm', register: 'register', timbre: 'timbre' };
 
 /** Slow modulation of the form's own parameters: the macro-form breathes too. Depths are 0..1. */
 export type Modulation = { periodMin: number; bits: number; pace: number; ceiling: number };
@@ -64,7 +68,7 @@ const NOTHING: Intensity = { pulseVoices: 0, density: 0, breath: 0, doubling: 0,
 /** Kinds of change whose cost in bits the director learns from the listener. */
 type Kind = 'rung' | Changeable;
 /** First guesses, replaced by what the listener measures (harmony: per fifth). */
-const INITIAL_COST: Record<Kind, number> = { rung: 15, harmony: 25, pitch: 18, rhythm: 8, register: 10, timbre: 10 };
+const INITIAL_COST: Record<Kind, number> = { rung: 15, harmony: 25, pitch: 18, melody: 10, rhythm: 8, register: 10, timbre: 10 };
 
 export type FormState = {
   model: Model;
@@ -84,7 +88,7 @@ export type FormState = {
   cost: Record<Kind, number>; // learned bits per unit of each kind of change
   pending?: { units: Partial<Record<Kind, number>>; planned: number; bits: number }; // the last change, being measured
   lastChange?: { planned: number; measured: number };
-  varied: boolean; // the one small variation of this sustain is done
+  varied: number; // small variations done in this sustain (two per sustain: the first one varies the melody)
   lastTurn?: string;
   recentAspects: Changeable[]; // each aspect once, most recently turned first
   arc: number;
@@ -96,7 +100,8 @@ export type FormState = {
  * The baseline follows drops quickly and rises slowly, and a single spike can't inflate it more than 2x.
  */
 const FAST = 0.5, DROP = 0.15, RISE = 0.05, MARGIN = 1.15, MIN_NEWS_BITS = 3, WARM_UP = 10;
-export const DEFAULTS = { budgetBits: 16, quietCycles: 2, reach: 1, valley: 3 } as const;
+export const DEFAULTS = { budgetBits: 24, quietCycles: 1, reach: 1, valley: 3 } as const;
+export const MAX_BITS = 128;
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
 function random(seed: number): [number, number] {
@@ -115,8 +120,8 @@ export function effectiveScope(scope: FormScope, minutes: number) {
   const quiet = scope.quietCycles ?? DEFAULTS.quietCycles;
   const ceiling = scope.maxLevel ?? TOP;
   return {
-    budgetBits: clamp(budget * (1 + (m?.bits ?? 0) * wave(0)), 2, 128),
-    quietCycles: Math.round(clamp(quiet * (1 + (m?.pace ?? 0) * wave(2.1)), 1, 32)),
+    budgetBits: clamp(budget * (1 + (m?.bits ?? 0) * wave(0)), 2, MAX_BITS),
+    quietCycles: Math.round(clamp(quiet * (1 + (m?.pace ?? 0) * wave(2.1)), 0, 32)),
     ceiling: Math.round(clamp(ceiling + (m?.ceiling ?? 0) * 4 * wave(4.2), 2, TOP)),
     valley: clamp(scope.valley ?? DEFAULTS.valley, 0, TOP),
     reach: clamp(scope.reach ?? DEFAULTS.reach, 1, 3),
@@ -140,7 +145,7 @@ export function initialForm(seed: number, level = 0): FormState {
   const f: FormState = {
     model: emptyModel(), phase: 'build', level: 0, peak: 0, floor: 0, sustainFor: 0, phaseCycles: 0, heard: 0, absorbedFor: 0,
     infoEma: 0, baseline: 0, noveltyEma: perAspect(0.5), noveltyBase: perAspect(0.5), cost: { ...INITIAL_COST },
-    varied: false, arc: 0, rng: seed >>> 0, recentAspects: [],
+    varied: 0, arc: 0, rng: seed >>> 0, recentAspects: [],
   };
   const arc = newArc(f, DEFAULTS.valley);
   return { ...arc, level, peak: Math.max(arc.peak, level) };
@@ -152,7 +157,7 @@ function newArc(f: FormState, valley: number): FormState {
   [r, rng] = random(rng); const peak = Math.round(TOP * (0.55 + 0.45 * r));
   [r, rng] = random(rng); const floor = Math.round(valley * r);
   [r, rng] = random(rng); const sustainFor = 8 + Math.round(16 * r);
-  return { ...f, peak, floor, sustainFor, rng, arc: f.arc + 1, varied: false };
+  return { ...f, peak, floor, sustainFor, rng, arc: f.arc + 1, varied: 0 };
 }
 
 /** Guide the form by hand: build to the ceiling now, release now, or turn now. */
@@ -199,19 +204,34 @@ function soundingLayers(state: PulseState): string[] {
 
 /** A turn must change something you can hear now, when the texture is sparse. */
 function audible(aspect: Changeable, state: PulseState): boolean {
+  if (aspect === 'melody') return state.pattern.filter(Boolean).length >= 2;
   return aspect === 'harmony' || aspect === 'rhythm' || aspect === 'timbre' || state.pattern.some(Boolean);
 }
 
+type Turn = { steer: Partial<Targets>; edit?: Partial<Piece>; label: string };
+
 /** One change in one aspect, chosen inside the scope. Harmony moves `fifths` fifths (one pitch at a time in the engine). */
-function turn(aspect: Changeable, targets: Targets, state: PulseState, scope: FormScope, r: number, fifths = 1): { steer: Partial<Targets>; label: string } {
+function turn(aspect: Changeable, targets: Targets, state: PulseState, piece: Piece, scope: FormScope, r: number, fifths = 1): Turn {
+  let seed = Math.floor(r * 2 ** 32);
+  const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
   switch (aspect) {
+    case 'melody': {
+      // Variation of the composed pattern itself: a neighbour note, a passing note, a displaced or omitted note.
+      // A Piece edit, so the grid shows it and the engine still morphs to it one note at a time.
+      const v = varyPattern(piece.pattern, targets.key, rand);
+      if (!v) return { steer: {}, label: 'no melodic variation possible' };
+      return { steer: {}, edit: { pattern: v.pattern, buildOrder: orderFor(v.pattern, targets.key, targets.grouping, rand, piece.buildOrder) }, label: v.label };
+    }
     case 'harmony': {
       // A key outside the scope walks back towards it; inside, up or down, never past the range.
       const [lo, hi] = scope.keys;
       const dir = targets.key < lo ? 1 : targets.key > hi ? -1 : targets.key <= lo ? 1 : targets.key >= hi ? -1 : r < 0.5 ? -1 : 1;
       const key = targets.key < lo || targets.key > hi ? targets.key + dir : clamp(targets.key + dir * fifths, lo, hi);
       const n = Math.abs(key - targets.key);
-      return { steer: { key }, label: `key ${dir > 0 ? 'up' : 'down'} ${n === 1 ? 'a fifth' : `${n} fifths`}` };
+      // The same letters land on new degrees in the new key: repair the pattern so 4ths and leading tones still resolve.
+      const pattern = repairPattern(piece.pattern, key, targets.grouping, rand);
+      const edit = pattern === piece.pattern ? undefined : { pattern, buildOrder: orderFor(pattern, key, targets.grouping, rand, piece.buildOrder) };
+      return { steer: { key }, edit, label: `key ${dir > 0 ? 'up' : 'down'} ${n === 1 ? 'a fifth' : `${n} fifths`}` };
     }
     case 'pitch': {
       const has = (k: Device['kind']) => targets.devices.some((d) => d.kind === k);
@@ -223,7 +243,11 @@ function turn(aspect: Changeable, targets: Targets, state: PulseState, scope: Fo
         ['retrograde', has('retrograde') ? without('retrograde') : [...targets.devices, { kind: 'retrograde' }]],
         ['transpose', [...without('transpose'), ...(Math.abs(shiftBy) >= 2 ? [] : [{ kind: 'transpose' as const, steps: shiftBy + (r < 0.5 ? 1 : -1) }])]],
       ];
-      const [label, devices] = pick(options, r);
+      // Only transformations that keep the melody's grammar (a retrograde turns every 4th-to-3rd resolution around).
+      const bad = (devices: Device[]) => violations(applyDevices(piece.pattern, devices), targets.key).length;
+      const allowed = options.filter(([, d]) => bad(d) <= bad(targets.devices));
+      if (!allowed.length) return { steer: {}, label: 'no pitch transformation keeps the melody well formed' };
+      const [label, devices] = pick(allowed, r);
       return { steer: { devices }, label };
     }
     case 'rhythm': {
@@ -261,7 +285,7 @@ function turn(aspect: Changeable, targets: Targets, state: PulseState, scope: Fo
 /** Called once per cycle with what was just scheduled. */
 export function direct(
   form: FormState, state: PulseState, events: NoteEvent[], targets: Targets, piece: Piece, scope: FormScope = defaultScope,
-): { form: FormState; steer?: Partial<Targets> } {
+): { form: FormState; steer?: Partial<Targets>; edit?: Partial<Piece> } {
   const heard = listen(form.model, events, piece.cycleLength, ['breath'], targets.orchestration);
   const info = heard.info;
   const noveltyEma = Object.fromEntries(ASPECTS.map((a) => [a, 0.9 * form.noveltyEma[a] + 0.1 * info.novelty[a]])) as Record<Aspect, number>;
@@ -283,7 +307,7 @@ export function direct(
   const minutes = (f.heard * piece.cycleLength * 60) / piece.pulsesPerMinute / 60;
   const now = effectiveScope(scope, minutes);
   const settled = absorbedFor >= now.quietCycles && rungReached(state, targets, piece);
-  const sustainFor = f.sustainFor * (now.quietCycles / DEFAULTS.quietCycles);
+  const sustainFor = f.sustainFor * (Math.max(0.5, now.quietCycles) / DEFAULTS.quietCycles);
   const to = (phase: Phase): FormState => ({ ...f, phase, phaseCycles: 0, absorbedFor: 0 });
 
   /** Close the measurement of the previous change (learn its cost per unit), open a new one. */
@@ -318,14 +342,18 @@ export function direct(
     }
 
     case 'sustain': {
-      const variations = (['rhythm', 'timbre'] as const).filter((a) => scope.aspects.includes(a));
-      if (!f.varied && variations.length && f.phaseCycles >= sustainFor / 2) {
-        // Variation within repetition: regroup the accents or re-colour one layer, whichever is more habituated.
+      const variations = (['melody', 'rhythm', 'timbre'] as const).filter((a) => scope.aspects.includes(a) && audible(a, state));
+      if (f.varied < 2 && variations.length && f.phaseCycles >= (sustainFor * (f.varied + 1)) / 3) {
+        // Variation within repetition, twice per sustain: first the melody itself (the pattern evolves over time, as
+        // in Reich), then whichever of the others is more habituated: regroup the accents or re-colour one layer.
         let r: number, rng = f.rng;
         [r, rng] = random(rng);
-        const aspect = [...variations].sort((a, b) => f.noveltyEma[a] / f.noveltyBase[a] - f.noveltyEma[b] / f.noveltyBase[b])[0]!;
-        const { steer } = turn(aspect, targets, state, scope, r);
-        return { form: changed({ ...f, varied: true, rng }, { [aspect]: 1 }), steer };
+        const ratio = (a: Changeable) => f.noveltyEma[HEARD_AS[a]] / f.noveltyBase[HEARD_AS[a]];
+        const aspect = f.varied === 0 && variations.includes('melody')
+          ? 'melody'
+          : [...variations].filter((a) => a !== 'melody' || variations.length === 1).sort((a, b) => ratio(a) - ratio(b))[0]!;
+        const { steer, edit } = turn(aspect, targets, state, piece, scope, r);
+        return { form: changed({ ...f, varied: f.varied + 1, rng }, { [aspect]: 1 }), steer, edit };
       }
       if (f.phaseCycles >= sustainFor && settled) return { form: to('release') };
       return { form: f };
@@ -352,22 +380,23 @@ export function direct(
       const fresh = hearable.filter((a) => a !== f.recentAspects[0]);
       const candidates = fresh.length ? fresh : hearable.length ? hearable : scope.aspects;
       const arcsSince = (a: Changeable) => { const i = f.recentAspects.indexOf(a); return i === -1 ? f.arc : i; };
-      const habituation = (a: Changeable) => (f.noveltyEma[a] / Math.max(1e-6, f.noveltyBase[a])) * 0.6 ** arcsSince(a);
+      const habituation = (a: Changeable) => (f.noveltyEma[HEARD_AS[a]] / Math.max(1e-6, f.noveltyBase[HEARD_AS[a]])) * 0.6 ** arcsSince(a);
       const ranked = [...candidates].sort((a, b) => habituation(a) - habituation(b) || (r < 0.5 ? -1 : 1));
 
       // Greedy: the first aspect always; more while the expected bits fit the budget. Harmony may modulate
       // several fifths if the budget allows (up to `reach`).
       const units: Partial<Record<Kind, number>> = {};
-      let spent = 0, next = targets, steer: Partial<Targets> = {};
+      let spent = 0, next = targets, nextPiece = piece, steer: Partial<Targets> = {}, edit: Partial<Piece> | undefined;
       const labels: string[] = [];
       for (const aspect of ranked) {
         const fifths = aspect === 'harmony' ? Math.round(clamp((now.budgetBits - spent) / f.cost.harmony, 1, now.reach)) : 1;
         const cost = f.cost[aspect] * fifths;
         if (labels.length && spent + cost > now.budgetBits * 1.25) continue;
         [r, rng] = random(rng);
-        const t = turn(aspect, next, state, scope, r, fifths);
+        const t = turn(aspect, next, state, nextPiece, scope, r, fifths);
         next = { ...next, ...t.steer };
         steer = { ...steer, ...t.steer };
+        if (t.edit) { edit = { ...edit, ...t.edit }; nextPiece = { ...nextPiece, ...t.edit }; }
         labels.push(`${aspect}: ${t.label}`);
         units[aspect] = aspect === 'harmony' ? Math.abs((next.key ?? targets.key) - targets.key) || 1 : 1;
         spent += cost;
@@ -375,7 +404,7 @@ export function direct(
       const chosen = Object.keys(units) as Changeable[];
       const recent = [...chosen, ...f.recentAspects.filter((a) => !chosen.includes(a))];
       f = newArc(changed({ ...to('build'), rng, lastTurn: labels.join(' + '), recentAspects: recent }, units), now.valley);
-      return { form: f, steer };
+      return { form: f, steer, edit };
     }
   }
 }
