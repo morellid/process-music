@@ -274,7 +274,7 @@ function turn(aspect: Changeable, targets: Targets, state: PulseState, piece: Pi
     case 'tempo': {
       // Accelerando or ritardando by 5-12%, inside the range around the composer's tempo; the engine slews there.
       const centre = scope.tempo ?? piece.pulsesPerMinute; // the composer's tempo, never the drifting current one
-      const lo = centre * (1 - TEMPO_RANGE), hi = centre * (1 + TEMPO_RANGE);
+      const lo = Math.ceil(centre * (1 - TEMPO_RANGE)), hi = Math.floor(centre * (1 + TEMPO_RANGE)); // whole numbers: no turn rounds back to where it was
       const by = 0.05 + 0.07 * ((r * 13.7) % 1);
       const up = targets.tempo <= lo ? true : targets.tempo >= hi ? false : r < 0.5;
       const tempo = Math.round(clamp(targets.tempo * (up ? 1 + by : 1 - by), lo, hi));
@@ -405,7 +405,7 @@ export function direct(
       // Tempo is rare: never ranked with the others, added on top at most once every few arcs (below).
       const hearable = scope.aspects.filter((a) => a !== 'tempo' && audible(a, state));
       const fresh = hearable.filter((a) => a !== f.recentAspects[0]);
-      const candidates = fresh.length ? fresh : hearable.length ? hearable : scope.aspects;
+      const candidates = fresh.length ? fresh : hearable.length ? hearable : scope.aspects.filter((a) => a !== 'tempo');
       const arcsSince = (a: Changeable) => { const i = f.recentAspects.indexOf(a); return i === -1 ? f.arc : i; };
       const habituation = (a: Changeable) => (f.noveltyEma[HEARD_AS[a]] / Math.max(1e-6, f.noveltyBase[HEARD_AS[a]])) * 0.6 ** arcsSince(a);
       const ranked = [...candidates].sort((a, b) => habituation(a) - habituation(b) || (r < 0.5 ? -1 : 1));
@@ -435,12 +435,14 @@ export function direct(
         [r, rng] = random(rng);
         const t = turn('tempo', next, state, nextPiece, scope, r);
         steer = { ...steer, ...t.steer };
-        labels.push(`tempo: ${t.label}`);
-        units.tempo = 1;
+        // Not a unit of the change: the listener works in pulses and can't hear tempo, so it must not share the
+        // measured bits (that would teach the director that the other aspects cost less than they do).
+        if (t.steer.tempo !== next.tempo) labels.push(`tempo: ${t.label}`);
       }
       const chosen = Object.keys(units) as Changeable[];
       const recent = [...chosen, ...f.recentAspects.filter((a) => !chosen.includes(a))];
-      f = newArc(changed({ ...to('build'), rng, lastTurn: labels.join(' + '), recentAspects: recent, tempoArc: tempoNow ? f.arc : f.tempoArc }, units), now.valley);
+      const tempoChanged = steer.tempo !== undefined && steer.tempo !== targets.tempo;
+      f = newArc(changed({ ...to('build'), rng, lastTurn: labels.join(' + '), recentAspects: recent, tempoArc: tempoChanged ? f.arc : f.tempoArc }, units), now.valley);
       return { form: f, steer, edit };
     }
   }

@@ -199,3 +199,12 @@ test('accents change between regular and additive groupings', () => {
   expect([...shapes].some((s) => s.includes('+'))).toBe(true);
   expect([...shapes].filter((s) => !s.includes('+')).length).toBeGreaterThan(1);
 });
+
+test('tempo turns never feed the cost learning, always change the tempo, and respect rarity even at awkward tempos', () => {
+  const run = simulate(3000, { tempo: 270 }, { ...defaultScope, tempo: 270 }); // 90 bpm: the range edges are fractional
+  expect(run.at(-1)!.form.cost.tempo).toBe(10); // never learned: the listener can't hear tempo
+  const turns = run.filter((f, i) => i > 0 && f.form.tempoArc !== run[i - 1]!.form.tempoArc);
+  expect(turns.length).toBeGreaterThan(0);
+  for (const f of turns) expect(f.targets.tempo).not.toBe(f.before.tempo);
+  for (const f of run) expect(f.form.recentAspects).not.toContain('tempo');
+});
