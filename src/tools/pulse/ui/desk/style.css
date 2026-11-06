@@ -1,0 +1,71 @@
+:root {
+  --bg: #f4f1ea;
+  --ink: #23211d;
+  --muted: #8a857a;
+  --line: #d8d2c4;
+  --note: #2f4b5c;
+  --goal: #c9d6dd;
+  --accent: #b5533c;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+body { margin: 0; padding: 24px 32px; }
+header { display: flex; align-items: baseline; gap: 20px; margin-bottom: 24px; }
+h1 { font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; margin: 0; font-size: 22px; }
+h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; margin: 24px 0 8px; }
+h2 small { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); margin-left: 8px; }
+#status { color: var(--muted); font-variant-numeric: tabular-nums; }
+button { font: inherit; padding: 6px 18px; border: 1px solid var(--ink); background: none; cursor: pointer; }
+button:hover { background: var(--ink); color: var(--bg); }
+button:disabled { opacity: 0.35; cursor: default; }
+button:disabled:hover { background: none; color: var(--ink); }
+.volume { font-size: 12px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+main { display: grid; grid-template-columns: 340px 1fr; gap: 40px; }
+#desk output { white-space: nowrap; font-size: 12px; }
+#desk .pair { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+
+#desk label { display: grid; grid-template-columns: 110px 1fr 72px; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
+#desk output { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+#desk select { font: inherit; }
+#desk fieldset { border: none; border-top: 1px solid var(--line); padding: 8px 0 0; margin: 16px 0 0; }
+#desk legend { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); padding-right: 8px; }
+
+.grid { display: grid; grid-template-columns: 40px repeat(var(--cols), 36px); gap: 2px; font-size: 11px; }
+.grid .row-label { color: var(--muted); align-self: center; }
+.cell { height: 22px; border: 1px solid var(--line); display: grid; place-items: center; cursor: pointer; color: var(--bg); }
+.cell:hover { border-color: var(--ink); }
+.cell.on { background: var(--note); border-color: var(--note); }
+.cell.goal { background: var(--goal); border-color: var(--goal); color: var(--note); }
+.cell.beat { border-left-color: var(--muted); }
+
+.layer { display: grid; grid-template-columns: 80px repeat(var(--cols), 36px); gap: 2px; font-size: 11px; margin: 2px 0; }
+.layer span { height: 22px; display: grid; place-items: center; border-bottom: 1px solid var(--line); }
+.layer .name { color: var(--muted); place-items: center start; border: none; }
+.layer .accent { border-bottom: 2px solid var(--accent); }
+
+#form { font-size: 12px; }
+#form .phase { font-size: 15px; margin-bottom: 6px; }
+#form .phase b { text-transform: uppercase; letter-spacing: 0.15em; font-weight: 600; }
+#form svg { display: block; margin: 6px 0 10px; }
+#form .aspects { display: grid; grid-template-columns: 70px 200px 40px; gap: 3px 8px; align-items: center; }
+#form .bar { height: 8px; background: var(--note); }
+#form .muted { color: var(--muted); }
+
+#desk .row { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
+#desk .row label { display: inline; margin: 0; }
+#desk .row .row-label { color: var(--ink); }
+#desk .toggles { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+#desk .toggle { display: inline-flex !important; gap: 3px; align-items: center; font-size: 12px; }
+#desk .buttons { display: flex; gap: 6px; margin: 10px 0; }
+#desk .buttons button { padding: 4px 10px; font-size: 12px; }
+
+.views { display: inline-flex; border: 1px solid var(--ink); }
+.views button { border: none; padding: 6px 14px; }
+.views button.active { background: var(--ink); color: var(--bg); }
+header { flex-wrap: wrap; }
+#voices { margin-top: 8px; }
+#voices canvas { display: block; width: 100%; }
+.voices-legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin: 0 0 10px 150px; }
+.voices-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+[hidden] { display: none !important; }
