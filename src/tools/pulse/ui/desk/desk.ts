@@ -8,8 +8,8 @@ import type { Command, Desk, Snapshot } from '../../control';
 import { Player, type Director } from '../../../../runtime/player';
 import type { Device } from '../../devices';
 import { initialState, step, type PulseState } from '../../engine';
-import { CHANGEABLE, DEFAULTS, MAX_BITS, TOP, defaultScope, direct, effectiveScope, force, initialForm, levelFor, type Changeable, type FormScope, type FormState } from '../../form';
-import { defaultPiece, defaultTargets, type Piece, type Targets } from '../../model';
+import { CHANGEABLE, DEFAULTS, MAX_BITS, PACES, TOP, paceName, defaultScope, direct, effectiveScope, force, initialForm, levelFor, type Changeable, type FormScope, type FormState } from '../../form';
+import { ACCENT_SHAPES, PULSES_PER_BEAT, accentStarts, bpm, defaultPiece, defaultTargets, type Piece, type Targets } from '../../model';
 import { generateScenario } from '../../scenario';
 import { createVoicesView } from './voices';
 import { keyName, name, sameStep, type Cell, type Step } from '../../theory';
@@ -123,6 +123,13 @@ const transposeSteps = () => { const d = devices().find((x) => x.kind === 'trans
 const hasDevice = (kind: Device['kind']) => devices().some((d) => d.kind === kind);
 const withDevice = (kind: Device['kind'], device?: Device) => steer({ devices: [...devices().filter((d) => d.kind !== kind), ...(device ? [device] : [])] });
 
+/** A slider over the paces in bars (1/4, 1/2, 1, 2, 4), shown with their length in seconds. */
+function paceSlider(label: string, get: () => number, set: (bars: number) => void) {
+  const at = () => { const i = PACES.findIndex((p) => p >= get() - 1e-9); return i === -1 ? PACES.length - 1 : i; };
+  return slider(label, 0, PACES.length - 1, 1, at, (i) => set(PACES[i]!),
+    (i) => `${paceName(PACES[i]!)}, ${+(PACES[i]! * secondsPerCycle()).toFixed(1)} s`);
+}
+
 const group = (legend: string, ...children: Node[]) => el('fieldset', {}, el('legend', { textContent: legend }), ...children);
 
 // Orchestration is a target (part of the form, D5b): every change goes through steer and is heard by the
@@ -161,7 +168,7 @@ const scope = () => formDirector.scope;
 const setScope = (patch: Partial<FormScope>) => { formDirector.scope = { ...formDirector.scope, ...patch }; render(player.state); };
 const modulation = () => scope().modulation ?? { periodMin: 0, bits: 0, pace: 0, ceiling: 0 };
 const setModulation = (patch: Partial<NonNullable<FormScope['modulation']>>) => setScope({ modulation: { ...modulation(), ...patch } });
-const secondsPerCycle = () => (60 / player.piece.pulsesPerMinute) * player.piece.cycleLength;
+const secondsPerCycle = () => (60 / player.state.tempo) * player.piece.cycleLength; // at the sounding tempo
 const KEY_OPTIONS = Array.from({ length: 11 }, (_, i) => [i - 4, keyName(i - 4)] as [number, string]);
 
 /** A select without its own label row, for compact pairs. */
@@ -215,8 +222,8 @@ $('desk').append(
   group('novelty',
     // In bits: how much news one change brings (the director learns what each kind of change costs).
     slider('bits per change', 2, MAX_BITS, 1, () => scope().budgetBits ?? DEFAULTS.budgetBits, (v) => setScope({ budgetBits: v }), (v) => `${v} bits`),
-    slider('pace', 0, 16, 1, () => scope().quietCycles ?? DEFAULTS.quietCycles, (v) => setScope({ quietCycles: v }),
-      (v) => (v ? `${Math.round(v * secondsPerCycle())} s quiet` : 'no wait')),
+    // Pace in bars: how often news may come, and how fast the engine moves (stage dwell follows it).
+    paceSlider('pace', () => scope().quietCycles ?? DEFAULTS.quietCycles, (v) => { steer({ stageDwell: v }); setScope({ quietCycles: v }); }),
     slider('modulation reach', 1, 3, 1, () => scope().reach ?? DEFAULTS.reach, (v) => setScope({ reach: v }), (v) => `${v} fifth${v > 1 ? 's' : ''}`),
     el('div', { className: 'row' }, el('span', { className: 'row-label', textContent: 'keys' }), el('span', { className: 'pair' },
       bare(KEY_OPTIONS, () => scope().keys[0], (lo) => setScope({ keys: [Math.min(lo, scope().keys[1]), scope().keys[1]] })), ' to ',
@@ -236,7 +243,12 @@ $('desk').append(
     slider('pulse voices', 0, 4, 1, () => t().pulseVoices, (v) => steer({ pulseVoices: v })),
     slider('breath', 0, 4, 1, () => t().breath, (v) => steer({ breath: v })),
     slider('3rds below', 0, 1, 0.05, () => t().doubling, (v) => steer({ doubling: v }), pct),
-    select('accents', [[2, '6 x 2'], [3, '4 x 3'], [4, '3 x 4'], [6, '2 x 6']], () => t().grouping, (v) => steer({ grouping: v })),
+    select('accents', [
+      ...([[2, '6 x 2'], [3, '4 x 3'], [4, '3 x 4'], [6, '2 x 6']] as const).map(([g, label]) => [String(g), label] as [string, string]),
+      ...ACCENT_SHAPES.map((shape) => [shape.join('+'), shape.join(' + ')] as [string, string]),
+    ], () => (t().accentGroups?.length ? t().accentGroups!.join('+') : String(t().grouping)), (v) => steer(v.includes('+')
+      ? { accentGroups: v.split('+').map(Number) }
+      : { grouping: Number(v) as Targets['grouping'], accentGroups: undefined })),
   ),
   group('canon',
     check('on', () => t().canon.on, (on) => steer({ canon: { ...t().canon, on } })),
@@ -250,7 +262,10 @@ $('desk').append(
     check('retrograde', () => hasDevice('retrograde'), (v) => withDevice('retrograde', v ? { kind: 'retrograde' } : undefined)),
   ),
   group('pace',
-    slider('stage dwell', 1, 8, 1, () => t().stageDwell, (v) => steer({ stageDwell: v }), (v) => `${v} cy`),
+    // The composer's tempo: the form may move up to 15% around it, rarely, and always gradually.
+    slider('tempo', 60, 180, 1, () => Math.round(bpm(t().tempo)), (v) => { steer({ tempo: v * PULSES_PER_BEAT }); setScope({ tempo: v * PULSES_PER_BEAT }); },
+      (v) => `${v} bpm${Math.round(bpm(player.state.tempo)) !== v ? ` (now ${Math.round(bpm(player.state.tempo))})` : ''}`),
+    paceSlider('stage dwell', () => t().stageDwell, (v) => steer({ stageDwell: v })),
     slider('chord dwell', 2, 16, 1, () => t().chordDwell, (v) => steer({ chordDwell: v }), (v) => `${v} cy`),
   ),
   routingControls(),
@@ -273,6 +288,7 @@ function renderGrid(state: PulseState) {
   const { pattern, buildOrder, cycleLength } = player.piece;
   const key = state.key;
   const grid = el('div', { className: 'grid' });
+  const beats = accentStarts(player.targets, cycleLength);
   grid.style.setProperty('--cols', String(cycleLength));
   for (const pitch of ROWS) {
     grid.append(el('span', { className: 'row-label', textContent: name(pitch, key) }));
@@ -280,7 +296,7 @@ function renderGrid(state: PulseState) {
       const composed = sameStep(pattern[col] ?? null, pitch);
       const sounding = sameStep(state.pattern[col] ?? null, pitch);
       const cell = el('div', {
-        className: `cell${sounding ? ' on' : composed ? ' goal' : ''}${col % player.targets.grouping === 0 ? ' beat' : ''}`,
+        className: `cell${sounding ? ' on' : composed ? ' goal' : ''}${beats[col] ? ' beat' : ''}`,
         textContent: composed ? String(buildOrder.indexOf(col) + 1) : '',
         title: `${name(pitch, key)}, pulse ${col + 1}`,
       });
@@ -330,7 +346,7 @@ function renderForm() {
   const now = effectiveScope(scope(), (f.heard * secondsPerCycle()) / 60);
   const last = f.lastChange ? ` . last change: planned ${Math.round(f.lastChange.planned)}, measured ${Math.round(f.lastChange.measured)} bits` : '';
   const costs = Object.entries(f.cost).map(([k, v]) => `${k} ${Math.round(v)}`).join(', ');
-  const params = el('div', { className: 'muted', textContent: `now: ${Math.round(now.budgetBits)} bits per change, ${now.quietCycles} quiet cycles, ceiling rung ${now.ceiling + 1}${last}` });
+  const params = el('div', { className: 'muted', textContent: `now: ${Math.round(now.budgetBits)} bits per change, pace ${paceName(now.quietCycles)}, ceiling rung ${now.ceiling + 1}${last}` });
   const learned = el('div', { className: 'muted', textContent: `learned cost (bits): ${costs}` });
   const chart = el('div');
   chart.innerHTML = svg;
@@ -401,7 +417,7 @@ function regenerate() {
   const seed = Math.floor(Math.random() * 1e9);
   const scenario = generateScenario(seed, formDirector.scope.keys);
   player.edit({ pattern: scenario.pattern, buildOrder: scenario.buildOrder, chords: scenario.chords }, 'scenario');
-  player.steer({ key: scenario.key, devices: [], grouping: scenario.grouping, canon: { ...scenario.canon, on: player.targets.canon.on } }, 'scenario');
+  player.steer({ key: scenario.key, devices: [], grouping: scenario.grouping, accentGroups: undefined, canon: { ...scenario.canon, on: player.targets.canon.on } }, 'scenario');
   if (player.director === formDirector) formDirector.form = initialForm(seed, levelFor(player.targets));
   render(player.state);
 }
@@ -417,7 +433,7 @@ function snapshot(): Snapshot {
     paused: player.paused,
     volume,
     cycle: st.cycle,
-    secondsPerCycle: (60 / player.piece.pulsesPerMinute) * player.piece.cycleLength,
+    secondsPerCycle: secondsPerCycle(),
     key: st.key,
     chord: { index: st.chordIndex, count: player.piece.chords.length },
     targets: player.targets,
@@ -431,7 +447,9 @@ async function apply(c: Command) {
   switch (c.type) {
     case 'steer': {
       const { canon, ...rest } = c.patch;
-      player.steer({ ...rest, ...(canon && { canon: { ...player.targets.canon, ...canon } }) }, 'conductor');
+      // A regular grouping from outside replaces additive accents, unless the patch sets those too.
+      const accents = rest.grouping !== undefined && !('accentGroups' in rest) ? { accentGroups: undefined } : {};
+      player.steer({ ...rest, ...accents, ...(canon && { canon: { ...player.targets.canon, ...canon } }) }, 'conductor');
       break;
     }
     case 'form':

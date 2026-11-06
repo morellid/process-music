@@ -1,6 +1,7 @@
 import type { NoteEvent, Output, ScheduledNote, Source } from './types';
 
-export type Engine<S, P, T> = (state: S, piece: P, targets: T) => { events: NoteEvent[]; state: S };
+/** One cycle; `pulsesPerMinute` is the tempo this cycle plays at (defaults to the piece's). */
+export type Engine<S, P, T> = (state: S, piece: P, targets: T) => { events: NoteEvent[]; state: S; pulsesPerMinute?: number };
 
 /** A policy that hears each scheduled cycle and may steer targets or edit the piece (the form director). */
 export type Director<S, P, T> = {
@@ -113,8 +114,7 @@ export class Player<S extends { cycle: number }, P extends Timing, T> {
   }
 
   private tick() {
-    const pulseSec = 60 / this.piece.pulsesPerMinute;
-    const cycleSec = pulseSec * this.piece.cycleLength;
+    const lookahead = (60 / this.piece.pulsesPerMinute) * this.piece.cycleLength;
     // If the tab was frozen and we fell behind, resume from now rather than burst-play the backlog.
     if (this.nextCycleTime < this.ctx.currentTime) this.nextCycleTime = this.ctx.currentTime + 0.05;
     while (this.shown.length && this.shown[0]!.time <= this.ctx.currentTime) {
@@ -122,9 +122,11 @@ export class Player<S extends { cycle: number }, P extends Timing, T> {
       this.onCycle?.(state, targets);
     }
 
-    while (this.nextCycleTime < this.ctx.currentTime + cycleSec + 0.2) {
+    while (this.nextCycleTime < this.ctx.currentTime + lookahead + 0.2) {
       const startPulse = this.state.cycle * this.piece.cycleLength;
-      const { events, state } = this.engine(this.state, this.piece, this.targets);
+      const { events, state, pulsesPerMinute } = this.engine(this.state, this.piece, this.targets);
+      const pulseSec = 60 / (pulsesPerMinute ?? this.piece.pulsesPerMinute);
+      const cycleSec = pulseSec * this.piece.cycleLength;
       for (const e of events) {
         const note = {
           midi: e.midi,

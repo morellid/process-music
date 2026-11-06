@@ -7,14 +7,14 @@ import type { Device } from './devices';
 import { applyDevices } from './devices';
 import { orderFor, repairPattern, varyPattern, violations } from './melody';
 import type { PulseState } from './engine';
-import type { Piece, Targets } from './model';
+import { ACCENT_SHAPES, bpm, type Piece, type Targets } from './model';
 import type { KeySig } from './theory';
 
 export type Phase = 'build' | 'sustain' | 'release' | 'turn';
-export type Changeable = 'harmony' | 'pitch' | 'melody' | 'rhythm' | 'register' | 'timbre';
-export const CHANGEABLE: Changeable[] = ['harmony', 'pitch', 'melody', 'rhythm', 'register', 'timbre'];
+export type Changeable = 'harmony' | 'pitch' | 'melody' | 'rhythm' | 'register' | 'timbre' | 'tempo';
+export const CHANGEABLE: Changeable[] = ['harmony', 'pitch', 'melody', 'rhythm', 'register', 'timbre', 'tempo'];
 /** The listener's aspect that hears each kind of change (a melodic variation is heard as pitch news). */
-const HEARD_AS: Record<Changeable, Aspect> = { harmony: 'harmony', pitch: 'pitch', melody: 'pitch', rhythm: 'rhythm', register: 'register', timbre: 'timbre' };
+const HEARD_AS: Record<Changeable, Aspect> = { harmony: 'harmony', pitch: 'pitch', melody: 'pitch', rhythm: 'rhythm', register: 'register', timbre: 'timbre', tempo: 'rhythm' };
 
 /** Slow modulation of the form's own parameters: the macro-form breathes too. Depths are 0..1. */
 export type Modulation = { periodMin: number; bits: number; pace: number; ceiling: number };
@@ -23,7 +23,8 @@ export type Modulation = { periodMin: number; bits: number; pace: number; ceilin
  * What the composer (or the conductor's policy) leaves open to the director.
  * - keys, aspects, instruments: what a turn may change (instruments: for timbre turns).
  * - maxLevel (ceiling), valley: how rich arcs may get, how low they may fall.
- * - budgetBits: novelty per change, in bits; quietCycles: absorbed quiet before the next change (pace).
+ * - budgetBits: novelty per change, in bits; quietCycles: the pace, in bars (one bar = one cycle of 12 pulses):
+ *   1/4, 1/2, 1, 2 or 4. Under a bar the director doesn't wait at all; the engine makes several stages per bar.
  * - reach: fifths a single harmony turn may modulate (within the bit budget).
  */
 export type FormScope = {
@@ -36,6 +37,7 @@ export type FormScope = {
   quietCycles?: number;
   reach?: number;
   modulation?: Modulation;
+  tempo?: number; // the composer's tempo (pulses per minute): the form may move up to TEMPO_RANGE around it, rarely
 };
 export const defaultScope: FormScope = { keys: [1, 5], aspects: CHANGEABLE };
 
@@ -68,7 +70,9 @@ const NOTHING: Intensity = { pulseVoices: 0, density: 0, breath: 0, doubling: 0,
 /** Kinds of change whose cost in bits the director learns from the listener. */
 type Kind = 'rung' | Changeable;
 /** First guesses, replaced by what the listener measures (harmony: per fifth). */
-const INITIAL_COST: Record<Kind, number> = { rung: 15, harmony: 25, pitch: 18, melody: 10, rhythm: 8, register: 10, timbre: 10 };
+const INITIAL_COST: Record<Kind, number> = { rung: 15, harmony: 25, pitch: 18, melody: 10, rhythm: 8, register: 10, timbre: 10, tempo: 10 };
+/** Tempo turns: at most this far from the composer's tempo, at most once every TEMPO_EVERY arcs, and only sometimes. */
+const TEMPO_RANGE = 0.15, TEMPO_EVERY = 3, TEMPO_CHANCE = 0.35;
 
 export type FormState = {
   model: Model;
@@ -91,6 +95,7 @@ export type FormState = {
   varied: number; // small variations done in this sustain (two per sustain: the first one varies the melody)
   lastTurn?: string;
   recentAspects: Changeable[]; // each aspect once, most recently turned first
+  tempoArc: number; // arc of the last tempo change: tempo turns are rare
   arc: number;
   rng: number;
 };
@@ -100,7 +105,12 @@ export type FormState = {
  * The baseline follows drops quickly and rises slowly, and a single spike can't inflate it more than 2x.
  */
 const FAST = 0.5, DROP = 0.15, RISE = 0.05, MARGIN = 1.15, MIN_NEWS_BITS = 3, WARM_UP = 10;
-export const DEFAULTS = { budgetBits: 24, quietCycles: 1, reach: 1, valley: 3 } as const;
+export const DEFAULTS = { budgetBits: 32, quietCycles: 1, reach: 1, valley: 3 } as const;
+/** Paces in bars: a quarter, half, one, two or four bars (Davide, 2026-11-06). */
+export const PACES = [0.25, 0.5, 1, 2, 4] as const;
+export const paceName = (bars: number) => (bars < 1 ? `${bars * 4}/4 bar` : `${bars} bar${bars > 1 ? 's' : ''}`);
+/** Nearest pace on the power-of-two grid (1/4 bar to 32 bars). */
+const snapPace = (bars: number) => 2 ** clamp(Math.round(Math.log2(Math.max(bars, 1e-3))), -2, 5);
 export const MAX_BITS = 128;
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
@@ -121,7 +131,7 @@ export function effectiveScope(scope: FormScope, minutes: number) {
   const ceiling = scope.maxLevel ?? TOP;
   return {
     budgetBits: clamp(budget * (1 + (m?.bits ?? 0) * wave(0)), 2, MAX_BITS),
-    quietCycles: Math.round(clamp(quiet * (1 + (m?.pace ?? 0) * wave(2.1)), 0, 32)),
+    quietCycles: snapPace(quiet * (1 + (m?.pace ?? 0) * wave(2.1))),
     ceiling: Math.round(clamp(ceiling + (m?.ceiling ?? 0) * 4 * wave(4.2), 2, TOP)),
     valley: clamp(scope.valley ?? DEFAULTS.valley, 0, TOP),
     reach: clamp(scope.reach ?? DEFAULTS.reach, 1, 3),
@@ -145,7 +155,7 @@ export function initialForm(seed: number, level = 0): FormState {
   const f: FormState = {
     model: emptyModel(), phase: 'build', level: 0, peak: 0, floor: 0, sustainFor: 0, phaseCycles: 0, heard: 0, absorbedFor: 0,
     infoEma: 0, baseline: 0, noveltyEma: perAspect(0.5), noveltyBase: perAspect(0.5), cost: { ...INITIAL_COST },
-    varied: 0, arc: 0, rng: seed >>> 0, recentAspects: [],
+    varied: 0, arc: 0, rng: seed >>> 0, recentAspects: [], tempoArc: 0,
   };
   const arc = newArc(f, DEFAULTS.valley);
   return { ...arc, level, peak: Math.max(arc.peak, level) };
@@ -205,6 +215,7 @@ function soundingLayers(state: PulseState): string[] {
 /** A turn must change something you can hear now, when the texture is sparse. */
 function audible(aspect: Changeable, state: PulseState): boolean {
   if (aspect === 'melody') return state.pattern.filter(Boolean).length >= 2;
+  if (aspect === 'tempo') return true;
   return aspect === 'harmony' || aspect === 'rhythm' || aspect === 'timbre' || state.pattern.some(Boolean);
 }
 
@@ -251,8 +262,23 @@ function turn(aspect: Changeable, targets: Targets, state: PulseState, piece: Pi
       return { steer: { devices }, label };
     }
     case 'rhythm': {
-      const grouping = pick(([2, 3, 4, 6] as const).filter((g) => g !== targets.grouping), r);
-      return { steer: { grouping }, label: `accents in ${grouping}s` };
+      // Accents regroup: regular (6x2, 4x3, 3x4, 2x6) or additive (3+3+2+2+2 ...), never the current one.
+      const current = targets.accentGroups?.length ? targets.accentGroups.join('+') : String(targets.grouping);
+      const options: Partial<Targets>[] = [
+        ...([2, 3, 4, 6] as const).map((grouping) => ({ grouping, accentGroups: undefined })),
+        ...ACCENT_SHAPES.map((accentGroups) => ({ accentGroups })),
+      ].filter((o) => (o.accentGroups ? o.accentGroups.join('+') : String(o.grouping)) !== current);
+      const steer = pick(options, r);
+      return { steer, label: steer.accentGroups ? `accents ${steer.accentGroups.join('+')}` : `accents in ${steer.grouping}s` };
+    }
+    case 'tempo': {
+      // Accelerando or ritardando by 5-12%, inside the range around the composer's tempo; the engine slews there.
+      const centre = scope.tempo ?? piece.pulsesPerMinute; // the composer's tempo, never the drifting current one
+      const lo = Math.ceil(centre * (1 - TEMPO_RANGE)), hi = Math.floor(centre * (1 + TEMPO_RANGE)); // whole numbers: no turn rounds back to where it was
+      const by = 0.05 + 0.07 * ((r * 13.7) % 1);
+      const up = targets.tempo <= lo ? true : targets.tempo >= hi ? false : r < 0.5;
+      const tempo = Math.round(clamp(targets.tempo * (up ? 1 + by : 1 - by), lo, hi));
+      return { steer: { tempo }, label: `${tempo > targets.tempo ? 'accelerando' : 'ritardando'} to ${Math.round(bpm(tempo))} bpm` };
     }
     case 'register': {
       if (state.canon.some(Boolean)) {
@@ -306,7 +332,7 @@ export function direct(
 
   const minutes = (f.heard * piece.cycleLength * 60) / piece.pulsesPerMinute / 60;
   const now = effectiveScope(scope, minutes);
-  const settled = absorbedFor >= now.quietCycles && rungReached(state, targets, piece);
+  const settled = absorbedFor >= Math.floor(now.quietCycles) && rungReached(state, targets, piece);
   const sustainFor = f.sustainFor * (Math.max(0.5, now.quietCycles) / DEFAULTS.quietCycles);
   const to = (phase: Phase): FormState => ({ ...f, phase, phaseCycles: 0, absorbedFor: 0 });
 
@@ -376,9 +402,10 @@ export function direct(
       // model can't see: a key unchanged for twenty minutes is fully absorbed). Never the aspect just turned first.
       let r: number, rng = f.rng;
       [r, rng] = random(rng);
-      const hearable = scope.aspects.filter((a) => audible(a, state));
+      // Tempo is rare: never ranked with the others, added on top at most once every few arcs (below).
+      const hearable = scope.aspects.filter((a) => a !== 'tempo' && audible(a, state));
       const fresh = hearable.filter((a) => a !== f.recentAspects[0]);
-      const candidates = fresh.length ? fresh : hearable.length ? hearable : scope.aspects;
+      const candidates = fresh.length ? fresh : hearable.length ? hearable : scope.aspects.filter((a) => a !== 'tempo');
       const arcsSince = (a: Changeable) => { const i = f.recentAspects.indexOf(a); return i === -1 ? f.arc : i; };
       const habituation = (a: Changeable) => (f.noveltyEma[HEARD_AS[a]] / Math.max(1e-6, f.noveltyBase[HEARD_AS[a]])) * 0.6 ** arcsSince(a);
       const ranked = [...candidates].sort((a, b) => habituation(a) - habituation(b) || (r < 0.5 ? -1 : 1));
@@ -394,6 +421,7 @@ export function direct(
         if (labels.length && spent + cost > now.budgetBits * 1.25) continue;
         [r, rng] = random(rng);
         const t = turn(aspect, next, state, nextPiece, scope, r, fifths);
+        if (!Object.keys(t.steer).length && !t.edit) continue; // nothing possible in this aspect now: spend the bits elsewhere
         next = { ...next, ...t.steer };
         steer = { ...steer, ...t.steer };
         if (t.edit) { edit = { ...edit, ...t.edit }; nextPiece = { ...nextPiece, ...t.edit }; }
@@ -401,9 +429,20 @@ export function direct(
         units[aspect] = aspect === 'harmony' ? Math.abs((next.key ?? targets.key) - targets.key) || 1 : 1;
         spent += cost;
       }
+      [r, rng] = random(rng);
+      const tempoNow = scope.aspects.includes('tempo') && f.arc - f.tempoArc >= TEMPO_EVERY && r < TEMPO_CHANCE;
+      if (tempoNow) {
+        [r, rng] = random(rng);
+        const t = turn('tempo', next, state, nextPiece, scope, r);
+        steer = { ...steer, ...t.steer };
+        // Not a unit of the change: the listener works in pulses and can't hear tempo, so it must not share the
+        // measured bits (that would teach the director that the other aspects cost less than they do).
+        if (t.steer.tempo !== next.tempo) labels.push(`tempo: ${t.label}`);
+      }
       const chosen = Object.keys(units) as Changeable[];
       const recent = [...chosen, ...f.recentAspects.filter((a) => !chosen.includes(a))];
-      f = newArc(changed({ ...to('build'), rng, lastTurn: labels.join(' + '), recentAspects: recent }, units), now.valley);
+      const tempoChanged = steer.tempo !== undefined && steer.tempo !== targets.tempo;
+      f = newArc(changed({ ...to('build'), rng, lastTurn: labels.join(' + '), recentAspects: recent, tempoArc: tempoChanged ? f.arc : f.tempoArc }, units), now.valley);
       return { form: f, steer, edit };
     }
   }

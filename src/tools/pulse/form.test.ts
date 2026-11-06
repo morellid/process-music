@@ -61,7 +61,7 @@ test('arcs reach different peaks', () => {
 });
 
 test('every open aspect gets turned, and the key stays in scope', () => {
-  const turned = new Set(trace.map((t) => t.form.lastTurn?.split(':')[0]).filter(Boolean));
+  const turned = new Set(trace.flatMap((t) => (t.form.lastTurn ?? '').split(' + ').map((x) => x.split(':')[0]!)).filter(Boolean));
   expect([...turned].sort()).toEqual([...defaultScope.aspects].sort());
   const [lo, hi] = defaultScope.keys;
   for (const { targets } of trace) {
@@ -116,7 +116,8 @@ test('novelty budget in bits: a bigger budget buys more rungs per step and more 
     const t = simulate(2000, {}, { ...defaultScope, budgetBits });
     return {
       maxJump: Math.max(...t.slice(1).map((f, i) => Math.abs(f.form.level - t[i]!.form.level))),
-      multiTurns: t.filter((f) => (f.form.lastTurn ?? '').includes(' + ')).length,
+      // Tempo is added on top by its own rarity rule, not bought with the budget.
+      multiTurns: t.filter((f) => (f.form.lastTurn ?? '').split(' + ').filter((x) => !x.startsWith('tempo')).length > 1).length,
     };
   };
   const small = jumps(4), big = jumps(80);
@@ -178,4 +179,32 @@ test('novelty pace: waiting longer for quiet means fewer changes', () => {
 test('timbre turns only use instruments that reach the layer: no bass on the vibraphone', () => {
   const t = simulate(4000, {}, { ...defaultScope, aspects: ['timbre'], instruments: ['vibraphone', 'piano'] });
   for (const f of t) expect(f.targets.orchestration.bass).not.toBe('vibraphone');
+});
+
+test('tempo changes rarely, gradually, and stays within 15% of the composer tempo', () => {
+  const tempoTurns = trace.filter((f, i) => i > 0 && f.form.tempoArc !== trace[i - 1]!.form.tempoArc);
+  const arcs = trace.at(-1)!.form.arc;
+  expect(tempoTurns.length).toBeGreaterThan(0);
+  expect(tempoTurns.length).toBeLessThanOrEqual(Math.ceil(arcs / 3));
+  for (let i = 1; i < tempoTurns.length; i++) expect(tempoTurns[i]!.form.tempoArc - tempoTurns[i - 1]!.form.tempoArc).toBeGreaterThanOrEqual(3);
+  for (const f of trace) {
+    expect(f.targets.tempo).toBeGreaterThanOrEqual(360 * 0.85 - 1);
+    expect(f.targets.tempo).toBeLessThanOrEqual(360 * 1.15 + 1);
+    expect(Math.abs(f.state.tempo - (trace[trace.indexOf(f) - 1]?.state.tempo ?? f.state.tempo))).toBeLessThanOrEqual(f.state.tempo * 0.006);
+  }
+});
+
+test('accents change between regular and additive groupings', () => {
+  const shapes = new Set(trace.map((f) => (f.targets.accentGroups ? f.targets.accentGroups.join('+') : String(f.targets.grouping))));
+  expect([...shapes].some((s) => s.includes('+'))).toBe(true);
+  expect([...shapes].filter((s) => !s.includes('+')).length).toBeGreaterThan(1);
+});
+
+test('tempo turns never feed the cost learning, always change the tempo, and respect rarity even at awkward tempos', () => {
+  const run = simulate(3000, { tempo: 270 }, { ...defaultScope, tempo: 270 }); // 90 bpm: the range edges are fractional
+  expect(run.at(-1)!.form.cost.tempo).toBe(10); // never learned: the listener can't hear tempo
+  const turns = run.filter((f, i) => i > 0 && f.form.tempoArc !== run[i - 1]!.form.tempoArc);
+  expect(turns.length).toBeGreaterThan(0);
+  for (const f of turns) expect(f.targets.tempo).not.toBe(f.before.tempo);
+  for (const f of run) expect(f.form.recentAspects).not.toContain('tempo');
 });
