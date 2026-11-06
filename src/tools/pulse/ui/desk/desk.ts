@@ -8,7 +8,7 @@ import type { Command, Desk, Snapshot } from '../../control';
 import { Player, type Director } from '../../../../runtime/player';
 import type { Device } from '../../devices';
 import { initialState, step, type PulseState } from '../../engine';
-import { CHANGEABLE, DEFAULTS, TOP, defaultScope, direct, effectiveScope, force, initialForm, levelFor, type Changeable, type FormScope, type FormState } from '../../form';
+import { CHANGEABLE, DEFAULTS, MAX_BITS, TOP, defaultScope, direct, effectiveScope, force, initialForm, levelFor, type Changeable, type FormScope, type FormState } from '../../form';
 import { defaultPiece, defaultTargets, type Piece, type Targets } from '../../model';
 import { generateScenario } from '../../scenario';
 import { createVoicesView } from './voices';
@@ -18,11 +18,17 @@ import { keyName, name, sameStep, type Cell, type Step } from '../../theory';
 // Reload the page on any code update instead.
 import.meta.hot?.on('vite:beforeUpdate', () => location.reload());
 
+// Every load is a different piece: key, pattern, chords, accents and canon come from a fresh seed.
+const startSeed = Math.floor(Math.random() * 1e9);
+const start = generateScenario(startSeed, defaultScope.keys);
+const piece: Piece = { ...defaultPiece, key: start.key, pattern: start.pattern, buildOrder: start.buildOrder, chords: start.chords };
+const targets: Targets = { ...defaultTargets, key: start.key, grouping: start.grouping, canon: start.canon };
+
 const ctx = new AudioContext();
 const master = ctx.createGain();
 master.connect(ctx.destination); // our own master node: room for DSP later (D8)
-const output = new EnsembleOutput(ctx, master, SOLO_PIANO);
-const player = new Player<PulseState, Piece, Targets>(ctx, output, step, initialState(defaultPiece, 1), defaultPiece, defaultTargets);
+const output = new EnsembleOutput(ctx, master, targets.orchestration);
+const player = new Player<PulseState, Piece, Targets>(ctx, output, step, initialState(piece, startSeed), piece, targets);
 
 // The form director (D5b), switchable: when on, it steers through the same command path as the desk.
 const formDirector: Director<PulseState, Piece, Targets> & { form: FormState; scope: FormScope; trace: { bits: number; base: number }[] } = {
@@ -33,7 +39,7 @@ const formDirector: Director<PulseState, Piece, Targets> & { form: FormState; sc
     const d = direct(this.form, state, events, targets, piece, this.scope);
     this.form = d.form;
     this.trace = [...this.trace, { bits: d.form.info?.total ?? 0, base: d.form.baseline }].slice(-120);
-    return d.steer;
+    return { steer: d.steer, edit: d.edit };
   },
 };
 const setFormAuto = (on: boolean) => {
@@ -207,9 +213,9 @@ $('desk').append(
   ),
   group('novelty',
     // In bits: how much news one change brings (the director learns what each kind of change costs).
-    slider('bits per change', 2, 64, 1, () => scope().budgetBits ?? DEFAULTS.budgetBits, (v) => setScope({ budgetBits: v }), (v) => `${v} bits`),
-    slider('pace', 1, 16, 1, () => scope().quietCycles ?? DEFAULTS.quietCycles, (v) => setScope({ quietCycles: v }),
-      (v) => `${Math.round(v * secondsPerCycle())} s quiet`),
+    slider('bits per change', 2, MAX_BITS, 1, () => scope().budgetBits ?? DEFAULTS.budgetBits, (v) => setScope({ budgetBits: v }), (v) => `${v} bits`),
+    slider('pace', 0, 16, 1, () => scope().quietCycles ?? DEFAULTS.quietCycles, (v) => setScope({ quietCycles: v }),
+      (v) => (v ? `${Math.round(v * secondsPerCycle())} s quiet` : 'no wait')),
     slider('modulation reach', 1, 3, 1, () => scope().reach ?? DEFAULTS.reach, (v) => setScope({ reach: v }), (v) => `${v} fifth${v > 1 ? 's' : ''}`),
     el('div', { className: 'row' }, el('span', { className: 'row-label', textContent: 'keys' }), el('span', { className: 'pair' },
       bare(KEY_OPTIONS, () => scope().keys[0], (lo) => setScope({ keys: [Math.min(lo, scope().keys[1]), scope().keys[1]] })), ' to ',
@@ -394,7 +400,7 @@ function regenerate() {
   const seed = Math.floor(Math.random() * 1e9);
   const scenario = generateScenario(seed, formDirector.scope.keys);
   player.edit({ pattern: scenario.pattern, buildOrder: scenario.buildOrder, chords: scenario.chords }, 'scenario');
-  player.steer({ key: scenario.key, devices: [] }, 'scenario');
+  player.steer({ key: scenario.key, devices: [], grouping: scenario.grouping, canon: { ...scenario.canon, on: player.targets.canon.on } }, 'scenario');
   if (player.director === formDirector) formDirector.form = initialForm(seed, levelFor(player.targets));
   render(player.state);
 }
@@ -470,4 +476,5 @@ function showView(view: 'desk' | 'voices') {
 $('view-desk').onclick = () => showView('desk');
 $('view-voices').onclick = () => showView('voices');
 
+setFormAuto(true); // the form is on from the start: press Start and it builds, sustains, releases and turns by itself
 render(player.state);

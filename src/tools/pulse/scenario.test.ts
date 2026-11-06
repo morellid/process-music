@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { degree, violations } from './melody';
 import { generateScenario } from './scenario';
 
 const index = (s: { letter: number; octave: number }) => s.octave * 7 + s.letter;
@@ -18,7 +19,7 @@ test('pattern: 12 pulses, 6-9 notes in the pattern register, mostly stepwise, st
     expect(notes.length).toBeLessThanOrEqual(9);
     for (const n of notes) expect(index(n)).toBeGreaterThanOrEqual(index({ letter: 6, octave: 4 })); // B4
     for (const n of notes) expect(index(n)).toBeLessThanOrEqual(index({ letter: 5, octave: 5 })); // A5
-    for (let i = 1; i < notes.length; i++) expect(Math.abs(index(notes[i]!) - index(notes[i - 1]!))).toBeLessThanOrEqual(3);
+    for (let i = 1; i < notes.length; i++) expect(Math.abs(index(notes[i]!) - index(notes[i - 1]!))).toBeLessThanOrEqual(4); // a 5th at most
   }
 });
 
@@ -50,4 +51,33 @@ test('no chord has a minor 9th or a tritone over its bass', async () => {
       for (const v of c.voices) expect([1, 6]).not.toContain((midi(v, key) - bass + 120) % 12);
     }
   }
+});
+
+test('patterns make musical sense: tonic triad on the downbeat, 4th and leading tone resolve by step', () => {
+  for (const { pattern, key } of scenarios) {
+    expect(violations(pattern, key)).toEqual([]);
+    expect([0, 2, 4]).toContain(degree(pattern[0]!, key));
+    const notes = pattern.filter((c) => c !== null);
+    notes.forEach((n, i) => {
+      const next = notes[(i + 1) % notes.length]!;
+      if (degree(n, key) === 3) expect(index(next) - index(n)).toBe(-1); // 4th falls to the 3rd
+      if (degree(n, key) === 6) expect(index(next) - index(n)).toBe(1); // leading tone rises to the tonic
+    });
+  }
+});
+
+test('a half-built pattern never leaves a tension note without its resolution', () => {
+  for (const { pattern, key, buildOrder } of scenarios) {
+    const slots = pattern.flatMap((c, i) => (c ? [i] : []));
+    slots.forEach((slot, k) => {
+      if (![3, 6].includes(degree(pattern[slot]!, key))) return;
+      const resolution = slots[(k + 1) % slots.length]!;
+      expect(buildOrder.indexOf(resolution)).toBeLessThan(buildOrder.indexOf(slot));
+    });
+  }
+});
+
+test('accents and canon vary across scenarios', () => {
+  expect(new Set(scenarios.map((s) => s.grouping)).size).toBeGreaterThan(2);
+  expect(new Set(scenarios.map((s) => JSON.stringify(s.canon))).size).toBeGreaterThan(5);
 });

@@ -1,4 +1,4 @@
-import { SOLO_PIANO, type Routing } from '../../runtime/routing';
+import { ENSEMBLE, type Routing } from '../../runtime/routing';
 import type { Device } from './devices';
 import type { Cell, KeySig, Step } from './theory';
 
@@ -56,6 +56,6 @@ export const defaultTargets: Targets = {
   grouping: 3,
   devices: [],
   chordDwell: 8,
-  stageDwell: 4,
-  orchestration: SOLO_PIANO,
+  stageDwell: 2,
+  orchestration: ENSEMBLE, // the 18 Musicians line-up: pulse and bass on piano, pattern and canon on marimba, breath on vibraphone
 };

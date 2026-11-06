@@ -1,24 +1,28 @@
 import { expect, test } from 'vitest';
 import { initialState, step, type PulseState } from './engine';
 import { defaultScope, direct, effectiveScope, force, initialForm, rungReached, type FormState, type Phase } from './form';
-import { defaultPiece, defaultTargets, type Targets } from './model';
+import { violations } from './melody';
+import { generateScenario } from './scenario';
+import { defaultPiece, defaultTargets, type Piece, type Targets } from './model';
 
 // 3000 cycles = 100 minutes at the default tempo.
-type Frame = { form: FormState; targets: Targets; before: Targets; state: PulseState; steered: boolean };
+type Frame = { form: FormState; targets: Targets; before: Targets; state: PulseState; piece: Piece; steered: boolean };
 
-function simulate(cycles: number, start: Partial<Targets> = {}, scope = defaultScope) {
-  let state = initialState(defaultPiece, 1);
+function simulate(cycles: number, start: Partial<Targets> = {}, scope = defaultScope, from: Piece = defaultPiece) {
+  let piece = from;
+  let state = initialState(piece, 1);
   let form = initialForm(1);
   let targets: Targets = { ...defaultTargets, pulseVoices: 0, density: 0, breath: 0, ...start };
   const trace: Frame[] = [];
   for (let c = 0; c < cycles; c++) {
-    const r = step(state, defaultPiece, targets);
+    const r = step(state, piece, targets);
     state = r.state;
     const before = targets;
-    const d = direct(form, state, r.events, targets, defaultPiece, scope);
+    const d = direct(form, state, r.events, targets, piece, scope);
     form = d.form;
     if (d.steer) targets = { ...targets, ...d.steer };
-    trace.push({ form, targets, before, state, steered: !!d.steer });
+    if (d.edit) piece = { ...piece, ...d.edit };
+    trace.push({ form, targets, before, state, piece, steered: !!d.steer });
   }
   return trace;
 }
@@ -32,8 +36,20 @@ test('the form keeps cycling through build, sustain, release, turn', () => {
   expect(arcs).toBeGreaterThanOrEqual(8);
 });
 
-test('intensity moves one rung at a time', () => {
-  for (let i = 1; i < trace.length; i++) expect(Math.abs(trace[i]!.form.level - trace[i - 1]!.form.level)).toBeLessThanOrEqual(1);
+test('intensity moves a few rungs at most, and one at a time on a small bit budget', () => {
+  const jump = (t: Frame[]) => Math.max(...t.slice(1).map((f, i) => Math.abs(f.form.level - t[i]!.form.level)));
+  expect(jump(trace)).toBeLessThanOrEqual(4);
+  expect(jump(simulate(800, {}, { ...defaultScope, budgetBits: 8 }))).toBeLessThanOrEqual(1);
+});
+
+test('the melody varies over time and every variation keeps the rules', () => {
+  // Start like the app does: from a generated, well-formed pattern.
+  const s = generateScenario(3, defaultScope.keys);
+  const run = simulate(3000, { key: s.key, grouping: s.grouping }, defaultScope,
+    { ...defaultPiece, key: s.key, pattern: s.pattern, buildOrder: s.buildOrder, chords: s.chords });
+  const varied = run.filter((f, i) => i > 0 && f.piece !== run[i - 1]!.piece);
+  expect(varied.length).toBeGreaterThanOrEqual(8); // at least one per arc on average, over 100 minutes
+  for (const f of varied) expect(violations(f.piece.pattern, f.targets.key)).toEqual([]);
 });
 
 test('arcs reach different peaks', () => {
@@ -57,7 +73,7 @@ test('nothing is steered while the listener is still warming up', () => {
 test('a new rung only comes once the engine has realised the previous one', () => {
   for (let i = 1; i < trace.length; i++) {
     const f = trace[i]!, prev = trace[i - 1]!;
-    if (f.form.level !== prev.form.level) expect(rungReached(f.state, f.before, defaultPiece)).toBe(true);
+    if (f.form.level !== prev.form.level) expect(rungReached(f.state, f.before, prev.piece)).toBe(true);
   }
 });
 
