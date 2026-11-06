@@ -113,3 +113,39 @@ describe('pulse engine', () => {
     }
   });
 });
+
+test('a pace under a bar makes several one-note stages per cycle', () => {
+  const build = (stageDwell: number) => {
+    let state = initialState(defaultPiece, 1);
+    const targets = { ...defaultTargets, density: 1, breath: 0, stageDwell };
+    const counts: number[] = [];
+    for (let c = 0; c < 3; c++) {
+      state = step(state, defaultPiece, targets).state;
+      counts.push(state.pattern.filter(Boolean).length);
+    }
+    return counts;
+  };
+  expect(build(1)).toEqual([1, 2, 3]); // one note per bar
+  expect(build(0.25)).toEqual([4, 8, 8]); // four per bar (the pattern has 8 notes)
+  expect(build(0.5)).toEqual([2, 4, 6]);
+});
+
+test('tempo follows its target gradually, at most 0.5% per cycle, and each cycle reports its tempo', () => {
+  let state = initialState(defaultPiece, 1);
+  const targets = { ...defaultTargets, tempo: 400 };
+  const tempos: number[] = [];
+  for (let c = 0; c < 40; c++) {
+    const r = step(state, defaultPiece, targets);
+    tempos.push(r.pulsesPerMinute);
+    state = r.state;
+  }
+  expect(tempos[0]).toBe(360);
+  for (let i = 1; i < tempos.length; i++) expect(tempos[i]! - tempos[i - 1]!).toBeLessThanOrEqual(tempos[i - 1]! * 0.005 + 1e-9);
+  expect(tempos.at(-1)).toBeCloseTo(400, 0);
+});
+
+test('additive accents mark the start of every group', async () => {
+  const { accentStarts } = await import('./model');
+  expect(accentStarts({ grouping: 3, accentGroups: [3, 3, 2, 2, 2] }, 12).flatMap((a, i) => (a ? [i] : []))).toEqual([0, 3, 6, 8, 10]);
+  expect(accentStarts({ grouping: 4 }, 12).flatMap((a, i) => (a ? [i] : []))).toEqual([0, 4, 8]);
+});

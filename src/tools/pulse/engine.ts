@@ -2,7 +2,7 @@
 // morphStep (one note per stage) with a dwell per layer, so nothing jumps (D5).
 import type { NoteEvent } from '../../runtime/types';
 import { applyDevices } from './devices';
-import type { Piece, Targets } from './model';
+import { accentStarts, type Piece, type Targets } from './model';
 import { morphStep } from './morph';
 import { midi, shift, stepToward, type Cell, type KeySig, type Step } from './theory';
 
@@ -24,6 +24,7 @@ export type PulseState = {
   canonOffset: number;
   doubling: Cell[];
   accents: boolean[];
+  tempo: number; // sounding pulses per minute, moving towards Targets.tempo
   lastChange: Record<Layer, number>;
   rng: number;
 };
@@ -38,6 +39,7 @@ export function initialState(piece: Piece, seed: number): PulseState {
     pulseVoices: 0, breathDepth: 0, breathPos: 0, breathLen: 40,
     pattern: Array(L).fill(null), canon: Array(L).fill(null), canonOffset: 3, doubling: Array(L).fill(null),
     accents: Array(L).fill(false),
+    tempo: piece.pulsesPerMinute,
     lastChange: { key: never, pulse: never, breath: never, pattern: never, canon: never, doubling: never, accents: never },
     rng: seed >>> 0,
   };
@@ -71,7 +73,10 @@ function morphLayer(current: Cell[], goal: Cell[], order: number[]): Cell[] {
 const toward = (n: number, target: number) => n + Math.sign(target - n);
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
-export function step(state: PulseState, piece: Piece, targets: Targets): { events: NoteEvent[]; state: PulseState } {
+/** Tempo moves at most this share per cycle: accelerando and ritardando are gradual, never a jump. */
+const TEMPO_STEP = 0.005;
+
+export function step(state: PulseState, piece: Piece, targets: Targets): { events: NoteEvent[]; state: PulseState; pulsesPerMinute: number } {
   const L = piece.cycleLength;
   const order = fullOrder(piece.buildOrder, L);
   const st: PulseState = { ...state, lastChange: { ...state.lastChange } };
@@ -94,12 +99,15 @@ export function step(state: PulseState, piece: Piece, targets: Targets): { event
   let quiet = voiced !== st.chord;
   st.chord = voiced;
 
-  const change = (layer: Layer, apply: () => boolean) => {
-    if (!quiet && st.cycle - st.lastChange[layer] >= targets.stageDwell && apply()) st.lastChange[layer] = st.cycle;
+  // Pace under a bar (stageDwell 1/4 or 1/2): several one-note stages in the same cycle, one per fraction of the bar.
+  const stages = targets.stageDwell < 1 ? Math.round(1 / targets.stageDwell) : 1;
+  const change = (layer: Layer, apply: () => boolean, times = stages) => {
+    if (quiet || st.cycle - st.lastChange[layer] < targets.stageDwell) return;
+    for (let k = 0; k < times && apply(); k++) st.lastChange[layer] = st.cycle;
   };
   const changed = <T,>(before: T, after: T) => before !== after;
 
-  change('key', () => changed(st.key, (st.key = stepToward(st.key, targets.key))));
+  change('key', () => changed(st.key, (st.key = stepToward(st.key, targets.key))), 1); // one fifth per bar at most
   quiet ||= st.lastChange.key === st.cycle;
   change('pulse', () => changed(st.pulseVoices, (st.pulseVoices = toward(st.pulseVoices, clamp(targets.pulseVoices, 0, st.chord.length)))));
   change('breath', () => changed(st.breathDepth, (st.breathDepth = toward(st.breathDepth, clamp(targets.breath, 0, st.chord.length)))));
@@ -118,7 +126,7 @@ export function step(state: PulseState, piece: Piece, targets: Targets): { event
   const doublingGoal = mask(st.pattern, order, clamp(targets.doubling, 0, 1)).map((c) => c && shift(c, -2));
   change('doubling', () => changed(st.doubling, (st.doubling = morphLayer(st.doubling, doublingGoal, order))));
 
-  const accentGoal = Array.from({ length: L }, (_, i) => i % targets.grouping === 0);
+  const accentGoal = accentStarts(targets, L);
   change('accents', () => changed(st.accents, (st.accents = morphStep(st.accents, accentGoal, order, (a, b) => a === b))));
 
   // Render the cycle. Each layer's velocities stay inside one smplr velocity band (41-67 or 68-84), jitter included.
@@ -148,5 +156,9 @@ export function step(state: PulseState, piece: Piece, targets: Targets): { event
     }
   }
 
-  return { events, state: { ...st, cycle: st.cycle + 1, cycleInChord: st.cycleInChord + 1 } };
+  // Tempo: this cycle plays at the current tempo; the next one is a little closer to the target.
+  const tempo = st.tempo ?? piece.pulsesPerMinute;
+  const goalTempo = targets.tempo ?? piece.pulsesPerMinute;
+  const nextTempo = tempo + clamp(goalTempo - tempo, -tempo * TEMPO_STEP, tempo * TEMPO_STEP);
+  return { events, state: { ...st, tempo: nextTempo, cycle: st.cycle + 1, cycleInChord: st.cycleInChord + 1 }, pulsesPerMinute: tempo };
 }

@@ -6,7 +6,7 @@ export type Chord = { voices: Step[]; bass: Step };
 
 /** What the composer wrote. Edits apply at the next cycle. */
 export type Piece = {
-  pulsesPerMinute: number; // fixed: never a target (D5)
+  pulsesPerMinute: number; // starting tempo; the sounding tempo follows Targets.tempo gradually
   cycleLength: number;
   key: KeySig; // starting key
   chords: Chord[]; // the cycle, voicings inside the collection
@@ -23,9 +23,11 @@ export type Targets = {
   canon: { on: boolean; offset: number; interval: number }; // offset in pulses, interval in diatonic steps
   key: KeySig;
   grouping: 2 | 3 | 4 | 6; // accent regrouping of the cycle
+  accentGroups?: number[]; // additive accents (e.g. 3+3+2+2+2, summing to the cycle); when set, overrides grouping
+  tempo: number; // pulses per minute (3 pulses = one quarter: 360 = 120 bpm), reached gradually
   devices: Device[];
   chordDwell: number; // cycles per chord (section length)
-  stageDwell: number; // cycles each stage holds before the next note changes
+  stageDwell: number; // bars (cycles) each stage holds before the next note changes; 1/4 and 1/2 = several stages per bar
   orchestration: Routing; // instrument per layer: part of the form (D5b), applied by the output
 };
 
@@ -54,8 +56,27 @@ export const defaultTargets: Targets = {
   canon: { on: false, offset: 3, interval: 0 },
   key: 3,
   grouping: 3,
+  tempo: 360,
   devices: [],
   chordDwell: 8,
-  stageDwell: 2,
+  stageDwell: 1,
   orchestration: ENSEMBLE, // the 18 Musicians line-up: pulse and bass on piano, pattern and canon on marimba, breath on vibraphone
 };
+
+/** Additive accent shapes over 12 pulses, as in Reich's regroupings beyond the regular 6x2, 4x3, 3x4, 2x6. */
+export const ACCENT_SHAPES: number[][] = [[3, 3, 2, 2, 2], [2, 2, 3, 2, 3], [3, 2, 3, 2, 2], [2, 3, 2, 3, 2]];
+
+/** Which pulses carry an accent: the start of every group (additive groups when set, else the regular grouping). */
+export function accentStarts(t: Pick<Targets, 'grouping' | 'accentGroups'>, length: number): boolean[] {
+  if (t.accentGroups?.length) {
+    const starts = new Set<number>();
+    let at = 0;
+    for (const g of t.accentGroups) { starts.add(at % length); at += g; }
+    return Array.from({ length }, (_, i) => starts.has(i));
+  }
+  return Array.from({ length }, (_, i) => i % t.grouping === 0);
+}
+
+/** Pulses per minute <-> beats per minute (a quarter = 3 pulses, a bar = 12 pulses). */
+export const PULSES_PER_BEAT = 3;
+export const bpm = (pulsesPerMinute: number) => pulsesPerMinute / PULSES_PER_BEAT;
