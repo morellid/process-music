@@ -1,5 +1,7 @@
 # Pulse
 
+**Play it: https://morellid.github.io/pulse/**
+
 Minimalist pulse music that composes itself in the browser, in the general aesthetic of Steve Reich's *Music for 18 Musicians* period: pulsing chord cycles, breath-length swells, patterns built up one note at a time, canons, slow modulation. Not a pastiche, and it never stops: it changes slowly enough to sit behind your work.
 
 ## How it works
