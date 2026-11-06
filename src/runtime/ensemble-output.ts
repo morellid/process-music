@@ -50,11 +50,21 @@ export class EnsembleOutput implements Output {
   private instrument(name: InstrumentName): Loaded {
     const existing = this.loaded.get(name);
     if (existing) return existing;
-    const options = { destination: this.destination, scheduler: this.scheduler };
+    // Each instrument through its own trim, so the three libraries sit at comparable levels.
+    const trim = this.context.createGain();
+    trim.gain.value = 10 ** (INSTRUMENTS[name].gainDb / 20);
+    trim.connect(this.destination);
+    const options = { destination: trim, scheduler: this.scheduler };
     let loaded: Loaded;
     if (name === 'marimba') {
       const inst = Sampler(this.context, { ...options, buffers: {} });
-      loaded = { inst, ready: vcslPreset('Idiophones/Struck Idiophones/Marimba', INSTRUMENTS.marimba.release).then((p) => inst.reload(p)) };
+      // Reload only after the initial (empty) load has finished: smplr applies loads in the order they finish,
+      // so an empty load landing after the preset left the marimba loaded but silent.
+      loaded = {
+        inst,
+        ready: Promise.all([inst.ready, vcslPreset('Idiophones/Struck Idiophones/Marimba', INSTRUMENTS.marimba.release)])
+          .then(([, preset]) => inst.reload(preset)),
+      };
     } else {
       const inst = name === 'piano' ? SplendidGrandPiano(this.context, options) : Mallet(this.context, { ...options, instrument: 'Vibraphone - Soft Mallets' });
       loaded = { inst, ready: inst.ready };

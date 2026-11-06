@@ -20,7 +20,8 @@ export function crossfadeToBands(sfz: string, baseUrl: string, ampRelease: numbe
       pitch: Number(p.pitch_keycenter),
       velRange: [low, high] as [number, number],
       ...(p.volume ? { volume: Number(p.volume) } : {}),
-      ...(p.offset ? { offset: Number(p.offset) } : {}),
+      // No `offset`: SFZ counts it in sample frames (a few ms here) while smplr's offset is in seconds. smplr
+      // doesn't apply a preset region's offset today, but frames must never reach it as seconds.
     };
   });
   return { samples: { baseUrl, formats: ['ogg', 'm4a'] }, defaults: { ampRelease }, groups: [{ regions }] };
