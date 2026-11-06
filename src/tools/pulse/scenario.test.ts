@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { degree, violations } from './melody';
+import { degree, repairPattern, violations } from './melody';
 import { generateScenario } from './scenario';
 
 const index = (s: { letter: number; octave: number }) => s.octave * 7 + s.letter;
@@ -80,4 +80,14 @@ test('a half-built pattern never leaves a tension note without its resolution', 
 test('accents and canon vary across scenarios', () => {
   expect(new Set(scenarios.map((s) => s.grouping)).size).toBeGreaterThan(2);
   expect(new Set(scenarios.map((s) => JSON.stringify(s.canon))).size).toBeGreaterThan(5);
+});
+
+test('after a modulation the pattern is repaired to obey the rules in the new key', () => {
+  let r = 1;
+  const rand = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+  for (const { pattern, key, grouping } of scenarios) {
+    for (const to of [key - 1, key + 1, key + 2]) {
+      expect(violations(repairPattern(pattern, to, grouping, rand), to)).toEqual([]);
+    }
+  }
 });

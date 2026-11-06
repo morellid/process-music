@@ -4,7 +4,8 @@ import { emptyModel, listen, ASPECTS, type Aspect, type Info, type Model } from 
 import { INSTRUMENTS, LAYERS, SOLO_PIANO, type InstrumentName } from '../../runtime/routing';
 import type { NoteEvent } from '../../runtime/types';
 import type { Device } from './devices';
-import { orderFor, varyPattern } from './melody';
+import { applyDevices } from './devices';
+import { orderFor, repairPattern, varyPattern, violations } from './melody';
 import type { PulseState } from './engine';
 import type { Piece, Targets } from './model';
 import type { KeySig } from './theory';
@@ -211,12 +212,12 @@ type Turn = { steer: Partial<Targets>; edit?: Partial<Piece>; label: string };
 
 /** One change in one aspect, chosen inside the scope. Harmony moves `fifths` fifths (one pitch at a time in the engine). */
 function turn(aspect: Changeable, targets: Targets, state: PulseState, piece: Piece, scope: FormScope, r: number, fifths = 1): Turn {
+  let seed = Math.floor(r * 2 ** 32);
+  const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
   switch (aspect) {
     case 'melody': {
       // Variation of the composed pattern itself: a neighbour note, a passing note, a displaced or omitted note.
       // A Piece edit, so the grid shows it and the engine still morphs to it one note at a time.
-      let seed = Math.floor(r * 2 ** 32);
-      const rand = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32);
       const v = varyPattern(piece.pattern, targets.key, rand);
       if (!v) return { steer: {}, label: 'no melodic variation possible' };
       return { steer: {}, edit: { pattern: v.pattern, buildOrder: orderFor(v.pattern, targets.key, targets.grouping, rand, piece.buildOrder) }, label: v.label };
@@ -227,7 +228,10 @@ function turn(aspect: Changeable, targets: Targets, state: PulseState, piece: Pi
       const dir = targets.key < lo ? 1 : targets.key > hi ? -1 : targets.key <= lo ? 1 : targets.key >= hi ? -1 : r < 0.5 ? -1 : 1;
       const key = targets.key < lo || targets.key > hi ? targets.key + dir : clamp(targets.key + dir * fifths, lo, hi);
       const n = Math.abs(key - targets.key);
-      return { steer: { key }, label: `key ${dir > 0 ? 'up' : 'down'} ${n === 1 ? 'a fifth' : `${n} fifths`}` };
+      // The same letters land on new degrees in the new key: repair the pattern so 4ths and leading tones still resolve.
+      const pattern = repairPattern(piece.pattern, key, targets.grouping, rand);
+      const edit = pattern === piece.pattern ? undefined : { pattern, buildOrder: orderFor(pattern, key, targets.grouping, rand, piece.buildOrder) };
+      return { steer: { key }, edit, label: `key ${dir > 0 ? 'up' : 'down'} ${n === 1 ? 'a fifth' : `${n} fifths`}` };
     }
     case 'pitch': {
       const has = (k: Device['kind']) => targets.devices.some((d) => d.kind === k);
@@ -239,7 +243,11 @@ function turn(aspect: Changeable, targets: Targets, state: PulseState, piece: Pi
         ['retrograde', has('retrograde') ? without('retrograde') : [...targets.devices, { kind: 'retrograde' }]],
         ['transpose', [...without('transpose'), ...(Math.abs(shiftBy) >= 2 ? [] : [{ kind: 'transpose' as const, steps: shiftBy + (r < 0.5 ? 1 : -1) }])]],
       ];
-      const [label, devices] = pick(options, r);
+      // Only transformations that keep the melody's grammar (a retrograde turns every 4th-to-3rd resolution around).
+      const bad = (devices: Device[]) => violations(applyDevices(piece.pattern, devices), targets.key).length;
+      const allowed = options.filter(([, d]) => bad(d) <= bad(targets.devices));
+      if (!allowed.length) return { steer: {}, label: 'no pitch transformation keeps the melody well formed' };
+      const [label, devices] = pick(allowed, r);
       return { steer: { devices }, label };
     }
     case 'rhythm': {
@@ -378,17 +386,17 @@ export function direct(
       // Greedy: the first aspect always; more while the expected bits fit the budget. Harmony may modulate
       // several fifths if the budget allows (up to `reach`).
       const units: Partial<Record<Kind, number>> = {};
-      let spent = 0, next = targets, steer: Partial<Targets> = {}, edit: Partial<Piece> | undefined;
+      let spent = 0, next = targets, nextPiece = piece, steer: Partial<Targets> = {}, edit: Partial<Piece> | undefined;
       const labels: string[] = [];
       for (const aspect of ranked) {
         const fifths = aspect === 'harmony' ? Math.round(clamp((now.budgetBits - spent) / f.cost.harmony, 1, now.reach)) : 1;
         const cost = f.cost[aspect] * fifths;
         if (labels.length && spent + cost > now.budgetBits * 1.25) continue;
         [r, rng] = random(rng);
-        const t = turn(aspect, next, state, piece, scope, r, fifths);
+        const t = turn(aspect, next, state, nextPiece, scope, r, fifths);
         next = { ...next, ...t.steer };
         steer = { ...steer, ...t.steer };
-        if (t.edit) edit = { ...edit, ...t.edit };
+        if (t.edit) { edit = { ...edit, ...t.edit }; nextPiece = { ...nextPiece, ...t.edit }; }
         labels.push(`${aspect}: ${t.label}`);
         units[aspect] = aspect === 'harmony' ? Math.abs((next.key ?? targets.key) - targets.key) || 1 : 1;
         spent += cost;

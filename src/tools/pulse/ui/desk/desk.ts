@@ -27,7 +27,8 @@ const targets: Targets = { ...defaultTargets, key: start.key, grouping: start.gr
 const ctx = new AudioContext();
 const master = ctx.createGain();
 master.connect(ctx.destination); // our own master node: room for DSP later (D8)
-const output = new EnsembleOutput(ctx, master, targets.orchestration);
+// Start on the piano alone: syncOrchestration then loads the ensemble, and keeps the piano if a sample library fails.
+const output = new EnsembleOutput(ctx, master, SOLO_PIANO);
 const player = new Player<PulseState, Piece, Targets>(ctx, output, step, initialState(piece, startSeed), piece, targets);
 
 // The form director (D5b), switchable: when on, it steers through the same command path as the desk.

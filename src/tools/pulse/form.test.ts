@@ -50,6 +50,10 @@ test('the melody varies over time and every variation keeps the rules', () => {
   const varied = run.filter((f, i) => i > 0 && f.piece !== run[i - 1]!.piece);
   expect(varied.length).toBeGreaterThanOrEqual(8); // at least one per arc on average, over 100 minutes
   for (const f of varied) expect(violations(f.piece.pattern, f.targets.key)).toEqual([]);
+  // Modulations repair the pattern for the new key in the same turn.
+  const modulated = run.filter((f, i) => i > 0 && f.targets.key !== run[i - 1]!.targets.key);
+  expect(modulated.length).toBeGreaterThan(0);
+  for (const f of modulated) expect(violations(f.piece.pattern, f.targets.key)).toEqual([]);
 });
 
 test('arcs reach different peaks', () => {

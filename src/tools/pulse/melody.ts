@@ -99,6 +99,37 @@ function pitches(slots: number[], key: KeySig, grouping: number, r: () => number
 }
 
 /**
+ * Make a pattern fit a (new) key: after a modulation the same letters can land on new degrees (in C the 4th, F,
+ * falls to E; in G it is F#, the leading tone, and must rise). First the smallest change: one note a step up or
+ * down at a time, while that reduces the violations. If rules are still broken, keep the rhythm and write new
+ * pitches for it. Returns the pattern unchanged when it already obeys the rules.
+ */
+export function repairPattern(pattern: Cell[], key: KeySig, grouping: number, r: () => number): Cell[] {
+  let best = pattern, bad = violations(pattern, key).length;
+  for (let round = 0; round < 12 && bad > 0; round++) {
+    const options = notesOf(best).flatMap((n) => [-1, 1].map((d) => {
+      const p = [...best];
+      p[n.slot] = fromIndex(index(n.step) + d);
+      return p;
+    }));
+    const scored = options.map((p) => ({ p, bad: violations(p, key).length }));
+    const min = Math.min(...scored.map((s) => s.bad));
+    if (min >= bad) break;
+    const top = scored.filter((s) => s.bad === min);
+    best = top[Math.floor(r() * top.length)]!.p;
+    bad = min;
+  }
+  if (bad === 0) return best;
+  const slots = notesOf(pattern).map((n) => n.slot);
+  if (slots[0] !== 0 || slots.length < 3) return best;
+  const steps = pitches(slots, key, grouping, r);
+  if (!steps) return best;
+  const out: Cell[] = Array(pattern.length).fill(null);
+  slots.forEach((s, k) => (out[s] = steps[k]!));
+  return out;
+}
+
+/**
  * Build order: the downbeat, then the other beat starts, then off-beats; a tension note never before the note it
  * resolves to, so a half-built pattern never leaves a 4th hanging.
  */
