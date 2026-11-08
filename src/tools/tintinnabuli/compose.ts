@@ -58,7 +58,7 @@ export function compose(spec: Spec): Composition {
 
   const tonic = tonicLetter(spec.key, spec.minor);
   const slowest = Math.max(...spec.speeds);
-  const close = unit * slowest - spec.breath; // after the fastest voice's last breath
+  const close = unit * slowest - spec.breath; // as the fastest voice's last note ends (the line's trailing breath is dropped)
   const pitch = (i: number) => midi(fromIndex(i), spec.key);
   const events: NoteEvent[] = [];
   // Fastest voice highest, each slower voice an octave lower (as in Cantus).

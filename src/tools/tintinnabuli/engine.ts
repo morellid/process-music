@@ -6,7 +6,7 @@ import type { Composition } from './compose';
 export type Piece = { pulsesPerMinute: number; cycleLength: number; composition: Composition };
 export type TintiState = { cycle: number; start: number; playing?: Composition };
 
-export const CYCLE = 4; // units per scheduling cycle: short, so a "next piece now" is heard within a second or two
+export const CYCLE = 1; // one unit per scheduling cycle: a new piece is heard after at most about two seconds
 
 export const initialState = (): TintiState => ({ cycle: 0, start: 0 });
 
