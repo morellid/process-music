@@ -1,8 +1,8 @@
 {
-  "name": "pulse",
+  "name": "process-music",
   "private": true,
   "type": "module",
-  "description": "Minimalist pulse music that composes itself in the browser",
+  "description": "Process music that composes itself in the browser: Pulse and Tintinnabuli",
   "license": "MIT",
   "exports": {
     "./*": "./src/*.ts"

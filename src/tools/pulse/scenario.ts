@@ -2,7 +2,7 @@
 // engine still morphs one note at a time from the old material to the new.
 import { generatePattern, orderFor } from './melody';
 import type { Chord, Targets } from './model';
-import { shift, type Cell, type KeySig, type Step } from './theory';
+import { shift, type Cell, type KeySig, type Step } from '../../runtime/theory';
 
 function random(seed: number): () => number {
   let state = seed >>> 0;

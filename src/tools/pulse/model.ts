@@ -1,6 +1,6 @@
 import { ENSEMBLE, type Routing } from '../../runtime/routing';
 import type { Device } from './devices';
-import type { Cell, KeySig, Step } from './theory';
+import type { Cell, KeySig, Step } from '../../runtime/theory';
 
 export type Chord = { voices: Step[]; bass: Step };
 

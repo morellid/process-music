@@ -5,7 +5,7 @@
 //   and neither sits on the downbeat; the pattern loops, so the last note resolves into the first;
 // - mostly stepwise; a leap of a 4th or more is followed by a step back the other way; no leap past a 5th;
 // - never the same pitch three times running; everything inside the pattern register.
-import { type Cell, type KeySig, type Step } from './theory';
+import { type Cell, type KeySig, type Step } from '../../runtime/theory';
 
 export const PATTERN_LOW = 34; // B4 as a diatonic index (octave * 7 + letter)
 export const PATTERN_HIGH = 40; // A5

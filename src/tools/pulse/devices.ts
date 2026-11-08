@@ -1,6 +1,6 @@
 // Devices compute a *target* pattern. They never change what sounds directly:
 // the engine reaches the target one note per stage (D5, "Compositional devices").
-import { mirror, shift, type Cell, type Step } from './theory';
+import { mirror, shift, type Cell, type Step } from '../../runtime/theory';
 
 export type Device =
   | { kind: 'transpose'; steps: number }
