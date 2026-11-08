@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { morphStep } from './morph';
 import { initialState, step, type PulseState } from './engine';
 import { defaultPiece, defaultTargets, type Targets } from './model';
-import { sameStep, type Cell } from './theory';
+import { sameStep, type Cell } from '../../runtime/theory';
 
 const s = (letter: number, octave: number) => ({ letter, octave });
 

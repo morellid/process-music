@@ -8,7 +8,7 @@ import { applyDevices } from './devices';
 import { orderFor, repairPattern, varyPattern, violations } from './melody';
 import type { PulseState } from './engine';
 import { ACCENT_SHAPES, bpm, type Piece, type Targets } from './model';
-import type { KeySig } from './theory';
+import type { KeySig } from '../../runtime/theory';
 
 export type Phase = 'build' | 'sustain' | 'release' | 'turn';
 export type Changeable = 'harmony' | 'pitch' | 'melody' | 'rhythm' | 'register' | 'timbre' | 'tempo';

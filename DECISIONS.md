@@ -8,7 +8,7 @@ Where this says *conductor*, it means any controller outside the page that steer
 
 Vite, no framework yet. Music logic testable in Node with Vitest. Python, Pyodide and Rust/WASM considered and rejected: no web UI loop, or overweight for the need.
 
-## D2 - Order and shape: shared runtime, one engine + UIs per tool (proposed)
+## D2 - Order and shape: shared runtime, one engine + UIs per tool (agreed)
 
 Tool 1 is **pulse** (*Music for 18 Musicians*-style, D5). Tool 2 is **tintinnabuli** (Pärt, D6).
 
@@ -18,8 +18,10 @@ Why this order (Davide, 2026-11-06): tintinnabuli form is decided before the mus
 src/
   runtime/        time, NoteEvent, scheduler (Worker clock), smplr output, command API, decisions log
   tools/pulse/    model, stepper engine, ui/<one folder per UI experiment>
-  tools/tinti/    later
+  tools/tintinnabuli/  model, composer, stepper, ui/
 ```
+
+2026-11-08 (Davide): both tools live in this repo, renamed from `pulse` to `process-music`; one page per tool (`/pulse/`, `/tintinnabuli/`) plus a landing page. A separate tintinnabuli repo would have to copy the runtime or publish it as a package. `theory.ts` moved to `runtime/`, since both tools use it.
 
 ## D3 - Piano (proposed)
 
@@ -191,7 +193,7 @@ Each layer is routed to an instrument: piano (smplr SplendidGrandPiano), marimba
 - VCSL files ask for a 15 s release; we use 0.3 s (marimba) and 0.6 s (vibraphone), otherwise every retrigger is a 15 s fade.
 - A routing change takes effect only once its instruments have loaded; on failure the previous routing stays. Default is solo piano; an "ensemble" preset maps pulse/bass to piano, pattern/canon to marimba, breath to vibraphone, as in the *18 Musicians* line-up.
 
-## D6 - Tool 2: tintinnabuli engine (later; design kept)
+## D6 - Tool 2: tintinnabuli engine (built 2026-11-08)
 
 Rules (Hillier's formalisation; Arvo Pärt Centre "formal algorithms"):
 
@@ -208,6 +210,18 @@ Rules (Hillier's formalisation; Arvo Pärt Centre "formal algorithms"):
 
 First UI candidates: text-to-music; centre-and-mode wheel with the T-voice ringing around it; phrase "staircase" timeline for form.
 
+### As built (2026-11-08)
+
+- **Composed whole, then stepped.** `compose(spec)` returns every note of the piece; the stepper only plays the notes that fall in each cycle (one unit per cycle). The shared Player and smplr output are reused unchanged. A *director* acts only once a piece and 5 s of silence are over, by swapping in the next composition (the "between pieces" of this decision).
+- **Centre = tonic**, natural minor (70% of random pieces) or major. One M line per piece; modes cycle phrase by phrase.
+- **Mensuration:** speeds where every speed divides the slowest (1:2, 1:3, 1:4, 1:2:4). Faster voices repeat the line; slower voices enter later by one breath per extra unit of speed (staggered entries, as in Cantus), which makes every voice's last note end at the same moment. A tutti tonic chord (each voice's centre and its T note) closes the piece. Cantus holds its last notes instead, which a decaying piano can't.
+- **Instrument ranges:** pitches are never folded. A layer whose notes don't fit its instrument's range plays on the piano (`routingFor`); random pieces pick the register where most voices fit. The lowest canon voice often lands on piano, which suits a bass line.
+- **Instruments never change inside a piece:** the next piece's samples are preloaded while the controls show it, its routing is set when the silence after the current piece begins, and already-scheduled notes keep their instrument. "Next piece now" stops the old piece and starts the new one from its first note: a clean cut, no overlap.
+- **Rhythm:** equal units, the phrase-final note doubled, a breath of 1-3 units after each phrase, all scaled by the voice's speed.
+- **Random pieces:** the phrase count is fitted to a random target length of 75-210 s.
+- **Not built yet:** text setting (still to verify against Hillier), staggered canon entries, pedal, bells. Instruments: piano, vibraphone, marimba.
+- **UI:** the whole piece as a score with a playhead (form is fixed, so it can be shown in full); controls edit only the next piece.
+
 ## D7 - Strudel: no (recommended)
 
 Research and headless test (2026-11-06, `@strudel/core` 1.2.6): its pattern model fits cyclic music. But for solo-piano pulse music, build-up, fixed-beat canons and chord cycles are simple array operations in a stepper, while Strudel brings AGPL-3.0, an explicit anti-LLM project policy (Oct 2026), loose releases (npm last released Jan 2026; output API changed on unreleased `main`, PR 2138; the published package doesn't import in plain Node), no TypeScript types and opaque patterns that UIs can't inspect. A slew-limited stepper with persistent process state (D5) is also something Strudel's stateless patterns don't model. Would change the call only if we want a live-coding text UI.
@@ -221,4 +235,4 @@ Composition never touches audio; we own the AudioContext and a master node, so a
 1. Runtime: stepper contract, Worker-clock scheduler, smplr output with pedal, command API, decisions log. Hidden-tab test.
 2. Pulse engine: (2.1) steady pulse on one chord + piano realism tests; (2.2) breath layer; (2.3) pattern build-up with composed order; (2.4) canon; (2.5) chord cycle; (2.6) one-pitch modulation.
 3. First pulse UI (targets desk); then more UI experiments.
-4. Tintinnabuli tool.
+4. Tintinnabuli tool (first version 2026-11-08).

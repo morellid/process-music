@@ -4,7 +4,7 @@ import type { NoteEvent } from '../../runtime/types';
 import { applyDevices } from './devices';
 import { accentStarts, type Piece, type Targets } from './model';
 import { morphStep } from './morph';
-import { midi, shift, stepToward, type Cell, type KeySig, type Step } from './theory';
+import { midi, shift, stepToward, type Cell, type KeySig, type Step } from '../../runtime/theory';
 
 type Layer = 'key' | 'pulse' | 'breath' | 'pattern' | 'canon' | 'doubling' | 'accents';
 

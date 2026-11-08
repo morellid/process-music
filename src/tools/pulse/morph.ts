@@ -1,5 +1,5 @@
 // The one primitive through which everything changes (D5): one position per stage.
-import { sameStep } from './theory';
+import { sameStep } from '../../runtime/theory';
 
 type Eq<T> = (a: T, b: T) => boolean;
 

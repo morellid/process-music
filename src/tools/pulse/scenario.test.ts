@@ -44,7 +44,7 @@ test('a cycle of 4 different chords, 4 voices each inside the pulse register, ov
 });
 
 test('no chord has a minor 9th or a tritone over its bass', async () => {
-  const { midi } = await import('./theory');
+  const { midi } = await import('../../runtime/theory');
   for (const { chords, key } of scenarios) {
     for (const c of chords) {
       const bass = midi(c.bass, key) % 12;

@@ -12,7 +12,7 @@ import { CHANGEABLE, DEFAULTS, MAX_BITS, PACES, TOP, paceName, defaultScope, dir
 import { ACCENT_SHAPES, PULSES_PER_BEAT, accentStarts, bpm, defaultPiece, defaultTargets, type Piece, type Targets } from '../../model';
 import { generateScenario } from '../../scenario';
 import { createVoicesView } from './voices';
-import { keyName, name, sameStep, type Cell, type Step } from '../../theory';
+import { keyName, name, sameStep, type Cell, type Step } from '../../../../runtime/theory';
 
 // Dev: re-running this module in place would start a second player.
 // Reload the page on any code update instead.

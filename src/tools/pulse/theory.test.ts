@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { accidentals, keyName, midi, name, shift, stepToward, type Step } from './theory';
+import { accidentals, keyName, midi, name, shift, stepToward, type Step } from '../../runtime/theory';
 import { applyDevices } from './devices';
 
 const s = (letter: number, octave: number): Step => ({ letter, octave });
