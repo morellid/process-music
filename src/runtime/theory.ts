@@ -36,8 +36,9 @@ export const keyName = (key: KeySig): string => `${MAJOR_TONICS[key + 7]} major`
 /** One key closer to the target on the circle of fifths: changes exactly one pitch. */
 export const stepToward = (key: KeySig, target: KeySig): KeySig => key + Math.sign(target - key);
 
-const index = (s: Step) => s.octave * 7 + s.letter;
-const fromIndex = (i: number): Step => ({ letter: ((i % 7) + 7) % 7, octave: Math.floor(i / 7) });
+/** Diatonic index: letter steps counted from C-1. */
+export const index = (s: Step) => s.octave * 7 + s.letter;
+export const fromIndex = (i: number): Step => ({ letter: ((i % 7) + 7) % 7, octave: Math.floor(i / 7) });
 
 /** Diatonic transposition by n letter steps. */
 export const shift = (s: Step, n: number): Step => fromIndex(index(s) + n);
