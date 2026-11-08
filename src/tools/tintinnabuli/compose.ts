@@ -1,5 +1,6 @@
 // The whole piece is composed before it plays (D6): compose() turns a Spec into every note, in units.
 // Pitches are diatonic indices (letter steps from C-1); the key signature decides accidentals at render time.
+import { INSTRUMENTS, type InstrumentName, type Routing } from '../../runtime/routing';
 import { fromIndex, LETTERS, midi, type KeySig } from '../../runtime/theory';
 import type { NoteEvent } from '../../runtime/types';
 import { CANONS, MODE_CYCLES, PROCESSES, T_VOICES, type Mode, type Process, type Spec, type TVoice } from './model';
@@ -42,7 +43,8 @@ const FINAL_HOLD = 8; // units the closing chord rings
 /**
  * One line (phrases of equal notes, the phrase-final note doubled, a breath after each phrase) is played by
  * every canon voice at its own speed: speed s makes every value s times longer, and faster voices repeat the
- * line so that all voices finish their last repetition together. A tutti tonic chord closes the piece.
+ * line. Slower voices enter later, by one breath per extra unit of speed (staggered entries, as in Cantus), so
+ * that every voice's last note ends at the same moment; a tutti tonic chord closes the piece there.
  */
 export function compose(spec: Spec): Composition {
   const line: { at: number; dur: number; m: number; j: number }[] = [];
@@ -58,7 +60,8 @@ export function compose(spec: Spec): Composition {
 
   const tonic = tonicLetter(spec.key, spec.minor);
   const slowest = Math.max(...spec.speeds);
-  const close = unit * slowest - spec.breath; // as the fastest voice's last note ends (the line's trailing breath is dropped)
+  // Voice s ends its last note at entry + unit*slowest - breath*s, with entry = breath*(s - 1): the same for all.
+  const close = unit * slowest - spec.breath;
   const pitch = (i: number) => midi(fromIndex(i), spec.key);
   const events: NoteEvent[] = [];
   // Fastest voice highest, each slower voice an octave lower (as in Cantus).
@@ -68,7 +71,7 @@ export function compose(spec: Spec): Composition {
       events.push({ pulse, midi: pitch(i), velocity, duration, layer: `${layer}${v + 1}` });
     for (let r = 0; r < slowest / s; r++) {
       for (const n of line) {
-        const pulse = (r * unit + n.at) * s;
+        const pulse = (r * unit + n.at) * s + spec.breath * (s - 1);
         voice('M', 62, pulse, n.dur * s, centre + n.m);
         voice('T', 54, pulse, n.dur * s, tNote(centre + n.m, tonic, spec.t, n.j));
       }
@@ -78,6 +81,21 @@ export function compose(spec: Spec): Composition {
   });
   events.sort((a, b) => a.pulse - b.pulse);
   return { spec, events, length: close + FINAL_HOLD };
+}
+
+/**
+ * Each layer on its instrument, unless the instrument can't reach all of the layer's notes: then piano.
+ * The output folds out-of-range notes by an octave, which would break a stepwise line, so a voice never relies on it.
+ */
+export function routingFor({ spec, events }: Composition): Routing {
+  const routing: Routing = {};
+  for (const layer of new Set(events.map((e) => e.layer))) {
+    const wanted: InstrumentName = layer[0] === 'M' ? spec.instruments.m : spec.instruments.t;
+    const notes = events.filter((e) => e.layer === layer).map((e) => e.midi);
+    const [lo, hi] = INSTRUMENTS[wanted].range;
+    routing[layer] = Math.min(...notes) >= lo && Math.max(...notes) <= hi ? wanted : 'piano';
+  }
+  return routing;
 }
 
 // ---- Random pieces --------------------------------------------------------
@@ -119,7 +137,14 @@ export function randomSpec(seed: number): Spec {
   const target = 75 + r() * 135;
   const seconds = (n: number) => (compose({ ...base, process: { ...base.process, n } }).length * 60) / base.unitsPerMinute;
   const n = Array.from({ length: 8 }, (_, i) => i + 3).reduce((best, n) => (Math.abs(seconds(n) - target) < Math.abs(seconds(best) - target) ? n : best));
-  return { ...base, process: { ...base.process, n } };
+  const sized = { ...base, process: { ...base.process, n } };
+  // The register where the most voices fit their chosen instruments (the rest play on piano).
+  const misfits = (centreOctave: number) => {
+    const composition = compose({ ...sized, centreOctave });
+    return Object.entries(routingFor(composition)).filter(([layer, inst]) => inst !== (layer[0] === 'M' ? sized.instruments.m : sized.instruments.t)).length;
+  };
+  const centreOctave = [base.centreOctave, 4, 5, 3].reduce((best, o) => (misfits(o) < misfits(best) ? o : best));
+  return { ...sized, centreOctave };
 }
 
 // ---- Description ----------------------------------------------------------

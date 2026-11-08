@@ -47,6 +47,11 @@ export class EnsembleOutput implements Output {
     if (request === this.request) this.routing = routing;
   }
 
+  /** Load instruments ahead of need, without changing the routing. */
+  preload(routing: Routing): Promise<unknown> {
+    return Promise.all([...new Set(Object.values(routing))].map((name) => this.instrument(name).ready));
+  }
+
   private instrument(name: InstrumentName): Loaded {
     const existing = this.loaded.get(name);
     if (existing) return existing;

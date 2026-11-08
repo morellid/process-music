@@ -3,7 +3,7 @@
 import './style.css';
 import { EnsembleOutput, INSTRUMENTS, type InstrumentName, type Routing } from '../../../runtime/ensemble-output';
 import { Player, type Director } from '../../../runtime/player';
-import { compose, describe, randomSpec, tonicName } from '../compose';
+import { compose, describe, randomSpec, routingFor, tonicName } from '../compose';
 import { CYCLE, elapsed, finished, initialState, step, type Piece, type TintiState } from '../engine';
 import { CANONS, MODE_CYCLES, PROCESSES, T_VOICES, type Spec } from '../model';
 import { drawScore } from './score';
@@ -12,33 +12,43 @@ import.meta.hot?.on('vite:beforeUpdate', () => location.reload());
 
 const seed = () => Math.floor(Math.random() * 1e9);
 const pieceOf = (spec: Spec): Piece => ({ pulsesPerMinute: spec.unitsPerMinute, cycleLength: CYCLE, composition: compose(spec) });
-const routingFor = (spec: Spec): Routing =>
-  Object.fromEntries(spec.speeds.flatMap((_, v) => [[`M${v + 1}`, spec.instruments.m], [`T${v + 1}`, spec.instruments.t]]));
+const pianoOnly = (routing: Routing): Routing => Object.fromEntries(Object.keys(routing).map((layer) => [layer, 'piano']));
 
 let next = randomSpec(seed());
 let keep = false; // keep the next-piece settings for every following piece, instead of a fresh random one
-const first = randomSpec(seed());
+let upcoming: Piece | undefined; // the following piece, composed and routed once the current one has ended
 
 const ctx = new AudioContext();
 const master = ctx.createGain();
 master.connect(ctx.destination);
-// Start on the piano alone, so a sample library that fails to load can't stop the music from starting.
-const output = new EnsembleOutput(ctx, master, Object.fromEntries(Object.keys(routingFor({ ...first, speeds: [1, 2, 4] })).map((l) => [l, 'piano'])));
-const player = new Player<TintiState, Piece, Record<string, never>>(ctx, output, step, initialState(), pieceOf(first), {});
+const first = pieceOf(randomSpec(seed()));
+const output = new EnsembleOutput(ctx, master, routingFor(first.composition));
+const player = new Player<TintiState, Piece, Record<string, never>>(ctx, output, step, initialState(), first, {});
 (window as unknown as { player: typeof player }).player = player;
 
-/** The next piece becomes the current one; a new random next is drawn unless the settings are kept. */
-function advance(): Partial<Piece> {
+/** Compose the next spec; a fresh random next is drawn unless the settings are kept. */
+function takeNext(): Piece {
   const piece = pieceOf(next);
-  output.route(routingFor(next)).catch(() => {}); // until loaded (or if loading fails), the piano plays
   if (!keep) next = randomSpec(seed());
   queueMicrotask(renderNext);
   return piece;
 }
 
-// Between pieces is the only moment anything changes (D6).
+// Between pieces is the only moment anything changes (D6). When the silence after a piece begins, the following
+// piece is composed and routed (its samples were preloaded while the controls showed it); when the silence ends, it starts.
+// Notes already scheduled keep the instrument they were scheduled on, so routing early never recolours the old piece.
 const between: Director<TintiState, Piece, Record<string, never>> = {
-  hear: (state, _events, _targets, piece) => (finished(state, piece) ? { edit: advance() } : undefined),
+  hear(state, _events, _targets, piece) {
+    if (elapsed(state, piece) < piece.composition.length) return undefined;
+    if (!upcoming) {
+      upcoming = takeNext();
+      output.route(routingFor(upcoming.composition)).catch(() => {}); // on failure the old routing (or piano) plays
+    }
+    if (!finished(state, piece)) return undefined;
+    const edit = upcoming;
+    upcoming = undefined;
+    return { edit };
+  },
 };
 player.director = between;
 
@@ -110,7 +120,9 @@ controls.append(...fields.map((f) => f.node), el('label', { className: 'keep' },
 
 function renderNext() {
   for (const f of fields) f.sync();
-  nextText.textContent = `next: ${describe(next, compose(next).length)}`;
+  const composition = compose(next);
+  nextText.textContent = `next: ${describe(next, composition.length)}`;
+  output.preload(routingFor(composition)).catch(() => {}); // in time for the switch; a failure falls back to piano then
 }
 
 // ---- Now playing: description and the whole score with a moving playhead ----
@@ -153,21 +165,32 @@ function renderStatus() {
 
 // ---- Transport ------------------------------------------------------------
 
-playButton.onclick = async () => {
-  if (player.playing) {
-    player.stop();
-    player.state = initialState(); // Start again plays this piece from its first note: a form is heard whole
-    mark = { position: 0, time: 0 };
-    return renderStatus();
-  }
+async function start() {
   status.textContent = 'loading instruments...';
   try {
     await player.start();
-  } catch (error) {
-    status.textContent = `could not start (${String(error)})`;
-    return;
+  } catch {
+    // A sample library failed to load: play this piece on the piano rather than not at all.
+    output.ready = output.route(pianoOnly(routingFor(player.piece.composition)));
+    try {
+      await player.start();
+    } catch (error) {
+      status.textContent = `could not start (${String(error)})`;
+    }
   }
-  output.route(routingFor(player.piece.composition.spec)).catch(() => {});
+  renderStatus();
+}
+
+/** Back to the first note of the current piece: a form is heard whole. */
+function rewind() {
+  player.state = initialState();
+  mark = { position: 0, time: 0 };
+}
+
+playButton.onclick = async () => {
+  if (!player.playing) return start();
+  player.stop();
+  rewind();
   renderStatus();
 };
 pauseButton.onclick = async () => {
@@ -175,7 +198,18 @@ pauseButton.onclick = async () => {
   else await player.pause();
   renderStatus();
 };
-nextButton.onclick = () => player.edit(advance(), 'ui');
+// A clean cut: stop the old piece (nothing of it overlaps the new one), route, then start the next from its first note.
+nextButton.onclick = async () => {
+  const playing = player.playing;
+  player.stop();
+  const piece = upcoming ?? takeNext();
+  upcoming = undefined;
+  await output.route(routingFor(piece.composition)).catch(() => {});
+  player.edit(piece, 'ui');
+  rewind();
+  if (playing) await start();
+  else renderStatus();
+};
 
 const stored = localStorage.getItem('tintinnabuli.volume');
 let volume = stored !== null && Number.isFinite(Number(stored)) ? Number(stored) : 0.8;

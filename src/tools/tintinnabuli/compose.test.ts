@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { fromIndex, index, midi } from '../../runtime/theory';
-import { compose, describe as describePiece, inTriad, mPhrase, phraseLengths, randomSpec, tNote, tonicLetter, tonicName } from './compose';
+import { INSTRUMENTS } from '../../runtime/routing';
+import { compose, describe as describePiece, inTriad, mPhrase, phraseLengths, randomSpec, routingFor, tNote, tonicLetter, tonicName } from './compose';
 import { T_VOICES, type Spec } from './model';
 
 const A = 5; // A minor / C major tonic letters
@@ -99,5 +100,32 @@ describe('composed pieces (random specs)', () => {
       expect(seconds).toBeLessThan(360);
     }
     expect(describePiece(randomSpec(1), 100)).toMatch(/^[A-G][#b]? (minor|major) \/ /);
+  });
+});
+
+describe('review findings', () => {
+  test('canon voices end together: every voice\'s last line note ends as the closing chord starts', () => {
+    for (const seed of seeds) {
+      const spec = randomSpec(seed);
+      const { events } = compose(spec);
+      const close = Math.max(...events.map((e) => e.pulse));
+      for (const layer of new Set(events.map((e) => e.layer))) {
+        const line = events.filter((e) => e.layer === layer && e.pulse < close);
+        const last = line.at(-1)!;
+        expect(last.pulse + last.duration).toBe(close);
+      }
+    }
+  });
+
+  test('no note is folded by an octave: every layer is routed to an instrument whose range holds all its notes', () => {
+    for (const seed of seeds) {
+      const composition = compose(randomSpec(seed));
+      const routing = routingFor(composition);
+      for (const e of composition.events) {
+        const [lo, hi] = INSTRUMENTS[routing[e.layer]!].range;
+        expect(e.midi).toBeGreaterThanOrEqual(lo);
+        expect(e.midi).toBeLessThanOrEqual(hi);
+      }
+    }
   });
 });
